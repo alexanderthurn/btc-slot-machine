@@ -1,6 +1,6 @@
 import { setEngine } from "./app/getEngine";
 import { LoadScreen } from "./app/screens/LoadScreen";
-import { MainScreen } from "./app/screens/main/MainScreen";
+import { SlotMachineScreen } from "./app/screens/slot/SlotMachineScreen";
 import { userSettings } from "./app/utils/userSettings";
 import { CreationEngine } from "./engine/engine";
 
@@ -17,8 +17,8 @@ setEngine(engine);
 (async () => {
   // Initialize the creation engine instance
   await engine.init({
-    background: "#1E1E1E",
-    resizeOptions: { minWidth: 768, minHeight: 1024, letterbox: false },
+    background: "#0d0d0d",
+    resizeOptions: { minWidth: 375, minHeight: 667, letterbox: false },
   });
 
   // Initialize the user settings
@@ -26,6 +26,6 @@ setEngine(engine);
 
   // Show the load screen
   await engine.navigation.showScreen(LoadScreen);
-  // Show the main screen once the load screen is dismissed
-  await engine.navigation.showScreen(MainScreen);
+  // Show the slot machine screen
+  await engine.navigation.showScreen(SlotMachineScreen);
 })();

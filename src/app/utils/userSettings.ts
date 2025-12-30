@@ -5,6 +5,7 @@ import { engine } from "../getEngine";
 const KEY_VOLUME_MASTER = "volume-master";
 const KEY_VOLUME_BGM = "volume-bgm";
 const KEY_VOLUME_SFX = "volume-sfx";
+const KEY_ADDRESS_CHECK_COUNT = "address-check-count";
 
 /**
  * Persistent user settings of volumes.
@@ -47,6 +48,16 @@ class UserSettings {
   public setSfxVolume(value: number) {
     engine().audio.sfx.setVolume(value);
     storage.setNumber(KEY_VOLUME_SFX, value);
+  }
+
+  /** Get address check count (10 or 20) */
+  public getAddressCheckCount(): number {
+    return storage.getNumber(KEY_ADDRESS_CHECK_COUNT) ?? 10;
+  }
+
+  /** Set address check count */
+  public setAddressCheckCount(value: number) {
+    storage.setNumber(KEY_ADDRESS_CHECK_COUNT, value);
   }
 }
 
