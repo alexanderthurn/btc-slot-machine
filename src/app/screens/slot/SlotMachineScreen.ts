@@ -196,7 +196,10 @@ export class SlotMachineScreen extends Container {
 
   private updateReelWords(words: string[]) {
     for (let i = 0; i < 12; i++) {
-      this.reels[i].word = words[i];
+      // Only update if not currently spinning (animation handles that)
+      if (!this.reels[i].spinning) {
+        this.reels[i].word = words[i];
+      }
     }
   }
 
@@ -220,12 +223,8 @@ export class SlotMachineScreen extends Container {
       return;
     }
 
-    const newWords = this.game.startSpin();
-    
-    // Update reel targets
-    for (let i = 0; i < 12; i++) {
-      this.reels[i].word = newWords[i];
-    }
+    // Start spin - words will be updated via stopSpin() in startReelAnimations()
+    this.game.startSpin();
   }
 
   private handleTestMode() {

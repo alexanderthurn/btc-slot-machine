@@ -178,10 +178,9 @@ export class SlotMachineGame {
     }
 
     this.setState("spinning");
-    this.events.onSpinStart?.();
 
-    // Generate new mnemonic (respecting locked words is tricky with real mnemonics)
-    // For now, we generate a completely new mnemonic if any word is unlocked
+    // Generate new mnemonic FIRST (before firing onSpinStart)
+    // so that getWords() returns the new words in the animation handler
     if (this.lockedIndices.size === 0 || this.lockedIndices.size < 12) {
       if (this._testMode) {
         // In test mode, always use the test mnemonic
@@ -195,6 +194,9 @@ export class SlotMachineGame {
 
     // Start BTC check immediately (parallel to animation)
     this.startCheckInBackground();
+
+    // Now fire onSpinStart - getWords() will return the NEW words
+    this.events.onSpinStart?.();
 
     return this.words;
   }
