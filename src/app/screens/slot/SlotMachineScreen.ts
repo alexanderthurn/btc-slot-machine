@@ -1,6 +1,6 @@
 import { FancyButton } from "@pixi/ui";
 import { animate } from "motion";
-import { Container, Graphics, Text } from "pixi.js";
+import { Container, Graphics, Sprite, Text, TilingSprite, Texture } from "pixi.js";
 
 import { engine } from "../../getEngine";
 import { SettingsPopup } from "../../popups/SettingsPopup";
@@ -19,6 +19,7 @@ export class SlotMachineScreen extends Container {
   public static assetBundles = ["main"];
 
   private game: SlotMachineGame;
+  private background: TilingSprite;
   private reelsContainer: Container;
   private reels: Reel[] = [];
   private controlsContainer: Container;
@@ -29,6 +30,7 @@ export class SlotMachineScreen extends Container {
   private autoplayToggle: AutoplayToggle;
   private btcResults: BTCResults;
   private settingsButton: FancyButton;
+  private logo: Sprite;
   private titleText: Text;
   private headerBackground: Graphics;
   private footerBackground: Graphics;
@@ -49,11 +51,26 @@ export class SlotMachineScreen extends Container {
     this.game = new SlotMachineGame();
     this.setupGameEvents();
 
+    // Tiled background texture
+    this.background = new TilingSprite({
+      texture: Texture.from("texture-background.jpg"),
+      width: 800,
+      height: 600,
+    });
+    // Scale texture down to make it tile more (5x smaller)
+    this.background.tileScale.set(0.2, 0.2);
+    this.addChild(this.background);
+
     // Header background
     this.headerBackground = new Graphics();
     this.addChild(this.headerBackground);
 
-    // Title
+    // Logo (top left corner)
+    this.logo = Sprite.from("logo-casino.jpg");
+    this.logo.anchor.set(0, 0);  // Anchor at top-left
+    this.addChild(this.logo);
+
+    // Title text (centered)
     this.titleText = new Text({
       text: "₿ SEED SLOT MACHINE ₿",
       style: {
@@ -116,34 +133,35 @@ export class SlotMachineScreen extends Container {
     });
     this.controlsContainer.addChild(this.spinButton);
 
-    // Test button (small, subtle)
+    // Test button (small, left-aligned text)
     this.testButton = new Container();
     this.testButtonBg = new Graphics();
-    this.testButtonBg.roundRect(-40, -15, 80, 30, 6);
+    this.testButtonBg.roundRect(0, -12, 80, 24, 4);
     this.testButtonBg.fill({ color: 0x333333 });
     this.testButtonBg.stroke({ color: 0x555555, width: 1 });
     this.testButton.addChild(this.testButtonBg);
     
     this.testButtonText = new Text({
-      text: "TEST",
+      text: "🎲 TEST",
       style: {
         fontFamily: "Arial, sans-serif",
         fontSize: 12,
         fontWeight: "bold",
-        fill: 0x888888,
+        fill: 0xffffff,
       },
     });
-    this.testButtonText.anchor.set(0.5);
+    this.testButtonText.anchor.set(0, 0.5);
+    this.testButtonText.x = 8;
     this.testButton.addChild(this.testButtonText);
     
     this.testButton.eventMode = "static";
     this.testButton.cursor = "pointer";
     this.testButton.on("pointerdown", () => this.handleTestMode());
     this.testButton.on("pointerover", () => {
-      this.testButtonText.style.fill = 0xF7931A;
+      this.testButtonBg.alpha = 0.8;
     });
     this.testButton.on("pointerout", () => {
-      this.testButtonText.style.fill = this.game.testMode ? 0xF7931A : 0x888888;
+      this.testButtonBg.alpha = 1;
     });
     this.controlsContainer.addChild(this.testButton);
 
@@ -166,14 +184,21 @@ export class SlotMachineScreen extends Container {
         index: i,
         width: this.reelWidth,
         height: this.reelHeight,
-        onLockChange: (index, locked) => {
-          this.game.setLocked(index, locked);
-        },
       });
       
       reel.word = initialWords[i];
       this.reels.push(reel);
       this.reelsContainer.addChild(reel);
+    }
+  }
+
+  /**
+   * Refresh reel lock states from settings
+   * Called after returning from settings popup
+   */
+  public refreshLockStates() {
+    for (const reel of this.reels) {
+      reel.updateLockState();
     }
   }
 
@@ -232,9 +257,8 @@ export class SlotMachineScreen extends Container {
     this.game.setTestMode(newTestMode);
     
     // Update button appearance
-    this.testButtonText.style.fill = newTestMode ? 0xF7931A : 0x888888;
     this.testButtonBg.clear();
-    this.testButtonBg.roundRect(-40, -15, 80, 30, 6);
+    this.testButtonBg.roundRect(0, -12, 80, 24, 4);
     this.testButtonBg.fill({ color: newTestMode ? 0x2a1a0a : 0x333333 });
     this.testButtonBg.stroke({ color: newTestMode ? 0xF7931A : 0x555555, width: 1 });
     
@@ -330,18 +354,28 @@ export class SlotMachineScreen extends Container {
 
   public async resume() {
     this.paused = false;
+    // Refresh lock states after returning from settings
+    this.refreshLockStates();
   }
 
   public reset() {
     this.game.reset();
     for (let i = 0; i < 12; i++) {
       this.reels[i].word = this.game.getWord(i);
-      this.reels[i].locked = false;
+      this.reels[i].updateLockState();
     }
-    this.testButtonText.style.fill = 0x888888;
+    // Reset test button appearance
+    this.testButtonBg.clear();
+    this.testButtonBg.roundRect(0, -12, 80, 24, 4);
+    this.testButtonBg.fill({ color: 0x333333 });
+    this.testButtonBg.stroke({ color: 0x555555, width: 1 });
   }
 
   public resize(width: number, height: number) {
+    // Resize tiled background to fill screen
+    this.background.width = width;
+    this.background.height = height;
+
     const centerX = width * 0.5;
     const isMobile = width < 600;
     
@@ -351,29 +385,36 @@ export class SlotMachineScreen extends Container {
       this.rows = 6;
       this.reelWidth = Math.min(140, (width - 60) / 2);
       this.reelHeight = 55;
-      this.titleText.style.fontSize = 22;
+      this.titleText.style.fontSize = 18;
+      this.logo.scale.set(0.16);
     } else if (width < 900) {
       this.columns = 3;
       this.rows = 4;
       this.reelWidth = Math.min(140, (width - 80) / 3);
       this.reelHeight = 58;
-      this.titleText.style.fontSize = 26;
+      this.titleText.style.fontSize = 24;
+      this.logo.scale.set(0.2);
     } else {
       this.columns = 4;
       this.rows = 3;
       this.reelWidth = 150;
       this.reelHeight = 65;
-      this.titleText.style.fontSize = 32;
+      this.titleText.style.fontSize = 28;
+      this.logo.scale.set(0.24);
     }
 
-    // Header
+    // Header - no overlay, just show background texture
     this.headerBackground.clear();
-    this.headerBackground.rect(0, 0, width, 70);
-    this.headerBackground.fill({ color: 0x0a0a0a, alpha: 0.9 });
 
+    // Logo on top left (bigger, 2x size)
+    this.logo.x = 10;
+    this.logo.y = 10;
+
+    // Title centered
     this.titleText.x = centerX;
     this.titleText.y = 38;
 
+    // Settings button on top right
     this.settingsButton.x = width - 35;
     this.settingsButton.y = 35;
 
@@ -399,22 +440,25 @@ export class SlotMachineScreen extends Container {
     
     // Footer background - position it below all reels with padding
     const footerY = lastReelBottomY + 25;
+    // Footer - no overlay, just show background texture
     this.footerBackground.clear();
-    this.footerBackground.rect(0, footerY, width, height - footerY);
-    this.footerBackground.fill({ color: 0x0a0a0a, alpha: 0.8 });
 
-    // Controls positioning - center them in the footer area
+    // Controls positioning - SPIN on left, AUTO and TEST stacked on right
     const controlsY = footerY + 50;
-    this.spinButton.x = centerX;
+    const spinButtonWidth = 200;
+    const rightControlsX = centerX + spinButtonWidth / 2 - 30;
+    
+    // SPIN button slightly left of center
+    this.spinButton.x = centerX - 60;
     this.spinButton.y = controlsY;
 
-    // Autoplay toggle below spin button, left side
-    this.autoplayToggle.x = centerX - 70;
-    this.autoplayToggle.y = controlsY + 55;
+    // AUTO toggle - top right, left-aligned
+    this.autoplayToggle.x = rightControlsX;
+    this.autoplayToggle.y = controlsY - 18;
 
-    // Test button below spin button, right side
-    this.testButton.x = centerX + 70;
-    this.testButton.y = controlsY + 55;
+    // TEST button - bottom right, left-aligned (below AUTO)
+    this.testButton.x = rightControlsX;
+    this.testButton.y = controlsY + 18;
 
     // BTC Results - give more space for detailed results
     this.btcResults.x = centerX;
@@ -428,6 +472,7 @@ export class SlotMachineScreen extends Container {
 
     // Animate elements in
     const elementsToAnimate = [
+      this.logo,
       this.titleText,
       this.settingsButton,
       this.reelsContainer,

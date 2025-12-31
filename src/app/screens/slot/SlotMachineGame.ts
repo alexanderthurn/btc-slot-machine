@@ -22,11 +22,11 @@ export interface SlotMachineGameEvents {
 
 /**
  * Manages the slot machine game state
+ * Locked words are now controlled via Settings popup
  */
 export class SlotMachineGame {
   private words: string[] = [];
   private mnemonic: string = "";
-  private lockedIndices: Set<number> = new Set();
   private _state: GameState = "idle";
   private _autoplayActive: boolean = false;
   private _testMode: boolean = false;
@@ -41,14 +41,28 @@ export class SlotMachineGame {
 
   /**
    * Generate a new mnemonic and update words
+   * Respects locked words from settings
    */
   private generateNewMnemonic() {
     if (this._testMode) {
       this.mnemonic = TEST_MNEMONIC;
+      this.words = this.mnemonic.split(" ");
     } else {
-      this.mnemonic = generateNewMnemonic();
+      // Generate a fresh random mnemonic
+      const newMnemonic = generateNewMnemonic();
+      const newWords = newMnemonic.split(" ");
+      
+      // Apply locked words from settings
+      const lockedWords = userSettings.getLockedWords();
+      for (let i = 0; i < 12; i++) {
+        if (lockedWords[i] !== null) {
+          newWords[i] = lockedWords[i];
+        }
+      }
+      
+      this.words = newWords;
+      this.mnemonic = newWords.join(" ");
     }
-    this.words = this.mnemonic.split(" ");
   }
 
   /**
@@ -59,7 +73,6 @@ export class SlotMachineGame {
     if (enabled) {
       this.mnemonic = TEST_MNEMONIC;
       this.words = this.mnemonic.split(" ");
-      this.lockedIndices.clear();
       this.events.onWordsChange?.(this.words);
     }
   }
@@ -122,28 +135,10 @@ export class SlotMachineGame {
   }
 
   /**
-   * Check if a word is locked
+   * Check if a word is locked (from settings)
    */
   public isLocked(index: number): boolean {
-    return this.lockedIndices.has(index);
-  }
-
-  /**
-   * Lock or unlock a word
-   */
-  public setLocked(index: number, locked: boolean) {
-    if (locked) {
-      this.lockedIndices.add(index);
-    } else {
-      this.lockedIndices.delete(index);
-    }
-  }
-
-  /**
-   * Get all locked indices
-   */
-  public getLockedIndices(): Set<number> {
-    return new Set(this.lockedIndices);
+    return userSettings.isPositionLocked(index);
   }
 
   /**
@@ -181,15 +176,25 @@ export class SlotMachineGame {
 
     // Generate new mnemonic FIRST (before firing onSpinStart)
     // so that getWords() returns the new words in the animation handler
-    if (this.lockedIndices.size === 0 || this.lockedIndices.size < 12) {
-      if (this._testMode) {
-        // In test mode, always use the test mnemonic
-        this.mnemonic = TEST_MNEMONIC;
-      } else {
-        // Generate new random mnemonic
-        this.mnemonic = generateNewMnemonic();
-      }
+    if (this._testMode) {
+      // In test mode, always use the test mnemonic
+      this.mnemonic = TEST_MNEMONIC;
       this.words = this.mnemonic.split(" ");
+    } else {
+      // Generate new random mnemonic, respecting locked words
+      const newMnemonic = generateNewMnemonic();
+      const newWords = newMnemonic.split(" ");
+      
+      // Apply locked words from settings
+      const lockedWords = userSettings.getLockedWords();
+      for (let i = 0; i < 12; i++) {
+        if (lockedWords[i] !== null) {
+          newWords[i] = lockedWords[i];
+        }
+      }
+      
+      this.words = newWords;
+      this.mnemonic = newWords.join(" ");
     }
 
     // Start BTC check immediately (parallel to animation)
@@ -263,7 +268,6 @@ export class SlotMachineGame {
   public reset() {
     this.setAutoplay(false);
     this._testMode = false;
-    this.lockedIndices.clear();
     this.generateNewMnemonic();
     this.lastResult = null;
     this.setState("idle");

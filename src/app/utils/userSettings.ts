@@ -6,6 +6,10 @@ const KEY_VOLUME_MASTER = "volume-master";
 const KEY_VOLUME_BGM = "volume-bgm";
 const KEY_VOLUME_SFX = "volume-sfx";
 const KEY_ADDRESS_CHECK_COUNT = "address-check-count";
+const KEY_LOCKED_WORDS = "locked-words";
+
+// Type for locked words: null means random, string means fixed word
+export type LockedWords = (string | null)[];
 
 /**
  * Persistent user settings of volumes.
@@ -59,7 +63,50 @@ class UserSettings {
   public setAddressCheckCount(value: number) {
     storage.setNumber(KEY_ADDRESS_CHECK_COUNT, value);
   }
+
+  /** Get locked words array (12 elements, null = random, string = fixed word) */
+  public getLockedWords(): LockedWords {
+    const stored = storage.getString(KEY_LOCKED_WORDS);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length === 12) {
+          return parsed;
+        }
+      } catch {
+        // Invalid JSON, return default
+      }
+    }
+    // Default: all random
+    return Array(12).fill(null);
+  }
+
+  /** Set locked word at specific position (null = random) */
+  public setLockedWord(index: number, word: string | null) {
+    const words = this.getLockedWords();
+    if (index >= 0 && index < 12) {
+      words[index] = word;
+      storage.setString(KEY_LOCKED_WORDS, JSON.stringify(words));
+    }
+  }
+
+  /** Set all locked words at once */
+  public setLockedWords(words: LockedWords) {
+    storage.setString(KEY_LOCKED_WORDS, JSON.stringify(words));
+  }
+
+  /** Check if a position is locked */
+  public isPositionLocked(index: number): boolean {
+    const words = this.getLockedWords();
+    return words[index] !== null;
+  }
+
+  /** Get locked word at position (null if random) */
+  public getLockedWord(index: number): string | null {
+    const words = this.getLockedWords();
+    return words[index] ?? null;
+  }
 }
 
-/** SHared user settings instance */
+/** Shared user settings instance */
 export const userSettings = new UserSettings();

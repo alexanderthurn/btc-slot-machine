@@ -1,18 +1,17 @@
 import { animate } from "motion";
 import { Container, Graphics, Text } from "pixi.js";
 import { getRandomWord } from "../../utils/bip39Words";
-import { LockButton } from "../../ui/LockButton";
+import { userSettings } from "../../utils/userSettings";
 
 export interface ReelOptions {
   index: number;
   width?: number;
   height?: number;
-  onLockChange?: (index: number, locked: boolean) => void;
 }
 
 /**
  * A single reel that displays a BIP39 word
- * Can be locked to prevent spinning
+ * Lock state is controlled via Settings popup
  */
 export class Reel extends Container {
   public readonly index: number;
@@ -20,14 +19,12 @@ export class Reel extends Container {
   private wordContainer: Container;
   private wordText: Text;
   private indexLabel: Text;
-  private lockButton: LockButton;
+  private lockIcon: Text;
   private _word: string = "";
-  private _locked: boolean = false;
   private _spinning: boolean = false;
   private reelWidth: number;
   private reelHeight: number;
   private spinInterval: number | null = null;
-  private onLockChange?: (index: number, locked: boolean) => void;
 
   constructor(options: ReelOptions) {
     super();
@@ -35,11 +32,9 @@ export class Reel extends Container {
     this.index = options.index;
     this.reelWidth = options.width ?? 140;
     this.reelHeight = options.height ?? 60;
-    this.onLockChange = options.onLockChange;
 
     // Background frame
     this.background = new Graphics();
-    this.drawBackground(false);
     this.addChild(this.background);
 
     // Word container with mask for scroll effect
@@ -75,23 +70,34 @@ export class Reel extends Container {
     this.indexLabel.y = -this.reelHeight / 2 + 12;
     this.addChild(this.indexLabel);
 
-    // Lock button
-    this.lockButton = new LockButton({
-      size: 24,
-      locked: false,
-      onToggle: (locked) => {
-        this._locked = locked;
-        this.drawBackground(locked);
-        this.onLockChange?.(this.index, locked);
+    // Lock icon (shows when locked via settings)
+    this.lockIcon = new Text({
+      text: "🔒",
+      style: {
+        fontSize: 12,
       },
     });
-    this.lockButton.x = this.reelWidth / 2 - 16;
-    this.lockButton.y = -this.reelHeight / 2 + 14;
-    this.addChild(this.lockButton);
+    this.lockIcon.anchor.set(0.5);
+    this.lockIcon.x = this.reelWidth / 2 - 14;
+    this.lockIcon.y = -this.reelHeight / 2 + 12;
+    this.lockIcon.visible = false;
+    this.addChild(this.lockIcon);
 
-    // Set initial random word
+    // Set initial word
     this._word = getRandomWord();
     this.wordText.text = this._word;
+    
+    // Update visual based on lock state
+    this.updateLockState();
+  }
+
+  /**
+   * Update visual to reflect lock state from settings
+   */
+  public updateLockState() {
+    const isLocked = userSettings.isPositionLocked(this.index);
+    this.lockIcon.visible = isLocked;
+    this.drawBackground(isLocked);
   }
 
   private drawBackground(locked: boolean) {
@@ -128,10 +134,17 @@ export class Reel extends Container {
   }
 
   /**
+   * Check if this reel is locked (from settings)
+   */
+  get locked(): boolean {
+    return userSettings.isPositionLocked(this.index);
+  }
+
+  /**
    * Start spinning the reel
    */
   public startSpin() {
-    if (this._locked || this._spinning) return;
+    if (this.locked || this._spinning) return;
     
     this._spinning = true;
     
@@ -198,34 +211,20 @@ export class Reel extends Container {
     this.wordText.text = value;
   }
 
-  get locked(): boolean {
-    return this._locked;
-  }
-
-  set locked(value: boolean) {
-    this._locked = value;
-    this.lockButton.locked = value;
-    this.drawBackground(value);
-  }
-
   get spinning(): boolean {
     return this._spinning;
-  }
-
-  public setOnLockChange(callback: (index: number, locked: boolean) => void) {
-    this.onLockChange = callback;
   }
 
   public resize(width: number, height: number) {
     this.reelWidth = width;
     this.reelHeight = height;
-    this.drawBackground(this._locked);
+    this.drawBackground(this.locked);
     
     this.indexLabel.x = -this.reelWidth / 2 + 14;
     this.indexLabel.y = -this.reelHeight / 2 + 12;
     
-    this.lockButton.x = this.reelWidth / 2 - 16;
-    this.lockButton.y = -this.reelHeight / 2 + 14;
+    this.lockIcon.x = this.reelWidth / 2 - 14;
+    this.lockIcon.y = -this.reelHeight / 2 + 12;
   }
 
   public override destroy() {
@@ -233,5 +232,3 @@ export class Reel extends Container {
     super.destroy();
   }
 }
-
-

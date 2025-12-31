@@ -16,13 +16,13 @@ export class LoadScreen extends Container {
     super();
 
     this.progressBar = new CircularProgressBar({
-      backgroundColor: "#3d3d3d",
-      fillColor: "#e72264",
+      backgroundColor: "#2a2a2a",
+      fillColor: "#F7931A",  // Bitcoin orange
       radius: 100,
       lineWidth: 15,
       value: 20,
       backgroundAlpha: 0.5,
-      fillAlpha: 0.8,
+      fillAlpha: 0.9,
       cap: "round",
     });
 
@@ -32,9 +32,9 @@ export class LoadScreen extends Container {
     this.addChild(this.progressBar);
 
     this.pixiLogo = new Sprite({
-      texture: Texture.from("logo.svg"),
+      texture: Texture.from("logo-casino.jpg"),
       anchor: 0.5,
-      scale: 0.2,
+      scale: 0.3,
     });
     this.addChild(this.pixiLogo);
   }

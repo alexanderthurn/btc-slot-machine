@@ -10,7 +10,7 @@ import { RoundedBox } from "../ui/RoundedBox";
 import { VolumeSlider } from "../ui/VolumeSlider";
 import { userSettings } from "../utils/userSettings";
 
-/** Popup for volume */
+/** Popup for settings - volume controls */
 export class SettingsPopup extends Container {
   /** The dark semi-transparent background covering current screen */
   private bg: Sprite;
@@ -24,8 +24,8 @@ export class SettingsPopup extends Container {
   private panelBase: RoundedBox;
   /** The build version label */
   private versionLabel: Text;
-  /** Layout that organises the UI components */
-  private layout: List;
+  /** Layout that organises the volume sliders */
+  private volumeLayout: List;
   /** Slider that changes the master volume */
   private masterSlider: VolumeSlider;
   /** Slider that changes background music volume */
@@ -44,57 +44,67 @@ export class SettingsPopup extends Container {
     this.panel = new Container();
     this.addChild(this.panel);
 
-    this.panelBase = new RoundedBox({ height: 425 });
+    // Panel for volume controls
+    this.panelBase = new RoundedBox({ 
+      width: 350,
+      height: 380,
+      color: 0x1a1a1a,
+      shadowColor: 0x000000,
+    });
     this.panel.addChild(this.panelBase);
 
+    // Title
     this.title = new Label({
       text: "Settings",
       style: {
-        fill: 0xec1561,
-        fontSize: 50,
+        fill: 0xF7931A,
+        fontSize: 36,
       },
     });
-    this.title.y = -this.panelBase.boxHeight * 0.5 + 60;
+    this.title.y = -this.panelBase.boxHeight * 0.5 + 45;
     this.panel.addChild(this.title);
 
-    this.doneButton = new Button({ text: "OK" });
-    this.doneButton.y = this.panelBase.boxHeight * 0.5 - 78;
+    // Volume sliders
+    this.volumeLayout = new List({ type: "vertical", elementsMargin: 8 });
+    this.volumeLayout.x = -140;
+    this.volumeLayout.y = -60;
+    this.panel.addChild(this.volumeLayout);
+
+    this.masterSlider = new VolumeSlider("Master");
+    this.masterSlider.onUpdate.connect((v) => {
+      userSettings.setMasterVolume(v / 100);
+    });
+    this.volumeLayout.addChild(this.masterSlider);
+
+    this.bgmSlider = new VolumeSlider("Music");
+    this.bgmSlider.onUpdate.connect((v) => {
+      userSettings.setBgmVolume(v / 100);
+    });
+    this.volumeLayout.addChild(this.bgmSlider);
+
+    this.sfxSlider = new VolumeSlider("SFX");
+    this.sfxSlider.onUpdate.connect((v) => {
+      userSettings.setSfxVolume(v / 100);
+    });
+    this.volumeLayout.addChild(this.sfxSlider);
+
+    // Done button - positioned at bottom of panel
+    this.doneButton = new Button({ text: "OK", width: 150, height: 50 });
+    this.doneButton.y = this.panelBase.boxHeight * 0.5 - 45;
     this.doneButton.onPress.connect(() => engine().navigation.dismissPopup());
     this.panel.addChild(this.doneButton);
 
+    // Version label
     this.versionLabel = new Label({
       text: `Version ${APP_VERSION}`,
       style: {
         fill: 0xffffff,
-        fontSize: 12,
+        fontSize: 10,
       },
     });
     this.versionLabel.alpha = 0.5;
-    this.versionLabel.y = this.panelBase.boxHeight * 0.5 - 15;
+    this.versionLabel.y = this.panelBase.boxHeight * 0.5 - 10;
     this.panel.addChild(this.versionLabel);
-
-    this.layout = new List({ type: "vertical", elementsMargin: 4 });
-    this.layout.x = -140;
-    this.layout.y = -80;
-    this.panel.addChild(this.layout);
-
-    this.masterSlider = new VolumeSlider("Master Volume");
-    this.masterSlider.onUpdate.connect((v) => {
-      userSettings.setMasterVolume(v / 100);
-    });
-    this.layout.addChild(this.masterSlider);
-
-    this.bgmSlider = new VolumeSlider("BGM Volume");
-    this.bgmSlider.onUpdate.connect((v) => {
-      userSettings.setBgmVolume(v / 100);
-    });
-    this.layout.addChild(this.bgmSlider);
-
-    this.sfxSlider = new VolumeSlider("SFX Volume");
-    this.sfxSlider.onUpdate.connect((v) => {
-      userSettings.setSfxVolume(v / 100);
-    });
-    this.layout.addChild(this.sfxSlider);
   }
 
   /** Resize the popup, fired whenever window size changes */
@@ -107,6 +117,7 @@ export class SettingsPopup extends Container {
 
   /** Set things up just before showing the popup */
   public prepare() {
+    // Load volume settings
     this.masterSlider.value = userSettings.getMasterVolume() * 100;
     this.bgmSlider.value = userSettings.getBgmVolume() * 100;
     this.sfxSlider.value = userSettings.getSfxVolume() * 100;

@@ -1,4 +1,5 @@
 import { FancyButton } from "@pixi/ui";
+import { Graphics } from "pixi.js";
 
 import { engine } from "../getEngine";
 
@@ -6,55 +7,69 @@ import { Label } from "./Label";
 
 const defaultButtonOptions = {
   text: "",
-  width: 301,
-  height: 112,
-  fontSize: 28,
+  width: 150,
+  height: 60,
+  fontSize: 24,
 };
 
 type ButtonOptions = typeof defaultButtonOptions;
 
 /**
- * The big rectangle button, with a label, idle and pressed states
+ * Bitcoin-themed button with dark background and orange accents
  */
 export class Button extends FancyButton {
   constructor(options: Partial<ButtonOptions> = {}) {
     const opts = { ...defaultButtonOptions, ...options };
 
+    // Create default view (dark button)
+    const defaultView = new Graphics();
+    defaultView.roundRect(0, 0, opts.width, opts.height, 10);
+    defaultView.fill({ color: 0x2a2a2a });
+    defaultView.stroke({ color: 0xF7931A, width: 2 });
+
+    // Create hover view (slightly brighter)
+    const hoverView = new Graphics();
+    hoverView.roundRect(0, 0, opts.width, opts.height, 10);
+    hoverView.fill({ color: 0x3a3a3a });
+    hoverView.stroke({ color: 0xFFB84D, width: 2 });
+
+    // Create pressed view
+    const pressedView = new Graphics();
+    pressedView.roundRect(0, 0, opts.width, opts.height, 10);
+    pressedView.fill({ color: 0x1a1a1a });
+    pressedView.stroke({ color: 0xF7931A, width: 2 });
+
     super({
-      defaultView: "button.png",
-      nineSliceSprite: [38, 50, 38, 50],
+      defaultView,
+      hoverView,
+      pressedView,
       anchor: 0.5,
       text: new Label({
         text: opts.text,
         style: {
-          fill: 0x4a4a4a,
+          fill: 0xF7931A,  // Bitcoin orange text
           align: "center",
           fontSize: opts.fontSize,
+          fontWeight: "bold",
         },
       }),
-      textOffset: { x: 0, y: -13 },
+      textOffset: { x: 0, y: 0 },
       defaultTextAnchor: 0.5,
-      scale: 0.9,
       animations: {
         hover: {
           props: {
-            scale: { x: 1.03, y: 1.03 },
-            y: 0,
+            scale: { x: 1.05, y: 1.05 },
           },
           duration: 100,
         },
         pressed: {
           props: {
-            scale: { x: 0.97, y: 0.97 },
-            y: 10,
+            scale: { x: 0.95, y: 0.95 },
           },
           duration: 100,
         },
       },
     });
-
-    this.width = opts.width;
-    this.height = opts.height;
 
     this.onDown.connect(this.handleDown.bind(this));
     this.onHover.connect(this.handleHover.bind(this));

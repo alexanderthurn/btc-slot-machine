@@ -84,8 +84,8 @@ export class AutoplayToggle extends Container {
       this.checkmark.stroke({ color: 0xffffff, width: 3 });
     }
 
-    // Update label color
-    this.label.style.fill = this._active ? 0xF7931A : 0x888888;
+    // Label always white
+    this.label.style.fill = 0xffffff;
   }
 
   private handleClick() {
