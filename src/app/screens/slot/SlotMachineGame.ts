@@ -165,6 +165,9 @@ export class SlotMachineGame {
     }
   }
 
+  // Promise for the current BTC check (runs parallel to spin animation)
+  private currentCheckPromise: Promise<BTCCheckResult> | null = null;
+
   /**
    * Start a spin
    * Returns the new words for unlocked positions
@@ -190,7 +193,26 @@ export class SlotMachineGame {
       this.words = this.mnemonic.split(" ");
     }
 
+    // Start BTC check immediately (parallel to animation)
+    this.startCheckInBackground();
+
     return this.words;
+  }
+
+  /**
+   * Start the BTC check in the background (parallel to spin animation)
+   */
+  private startCheckInBackground(): void {
+    const addressCount = userSettings.getAddressCheckCount();
+    this.events.onCheckStart?.(addressCount);
+
+    this.currentCheckPromise = checkBTCAddresses(
+      this.mnemonic,
+      addressCount,
+      (checked, total) => {
+        this.events.onCheckProgress?.(checked, total);
+      }
+    );
   }
 
   /**
@@ -200,8 +222,21 @@ export class SlotMachineGame {
     this.events.onSpinComplete?.(this.words);
     this.events.onWordsChange?.(this.words);
 
-    // Start BTC check
-    await this.checkAddresses();
+    // Wait for BTC check to complete (it started when spin began)
+    if (this.currentCheckPromise) {
+      try {
+        this.setState("checking");
+        const result = await this.currentCheckPromise;
+        this.lastResult = result;
+        this.events.onCheckComplete?.(result);
+        this.currentCheckPromise = null;
+      } catch (error) {
+        console.error("BTC check failed:", error);
+        this.currentCheckPromise = null;
+      }
+    }
+
+    this.setState("result");
 
     // Check if activity was found - stop autoplay if so
     if (this.lastResult?.hasActivity) {
@@ -216,34 +251,7 @@ export class SlotMachineGame {
         if (this._autoplayActive && this._state === "result") {
           this.startSpin();
         }
-      }, 1500); // 1.5 second delay between autoplay spins
-    }
-  }
-
-  /**
-   * Check BTC addresses for current seed phrase
-   */
-  private async checkAddresses(): Promise<void> {
-    this.setState("checking");
-    
-    const addressCount = userSettings.getAddressCheckCount();
-    this.events.onCheckStart?.(addressCount);
-
-    try {
-      const result = await checkBTCAddresses(
-        this.mnemonic, 
-        addressCount,
-        (checked, total) => {
-          this.events.onCheckProgress?.(checked, total);
-        }
-      );
-      
-      this.lastResult = result;
-      this.events.onCheckComplete?.(result);
-      this.setState("result");
-    } catch (error) {
-      console.error("BTC check failed:", error);
-      this.setState("result");
+      }, 1000); // 1 second delay between autoplay spins
     }
   }
 

@@ -1,0 +1,9 @@
+MUSIC: SUNO
+
+SFX:
+
+RUN:
+https://sfxr.me/#124PR1sXkDHhZUBqgTjeuThq2mc5kUF2iboxDjXEanBxK8Jew1c4BhqhAnkbrspbyZkqH8pMwWEzv7Zc2gxaYKXktGtsAjt7hajQwiBP2MF4UR5s8BnuSPBhvE
+
+WIN:
+https://sfxr.me/#34T6Pkie31Ea1VV91Rsgvc5ajH25mhMZMdYgvDyPLu1Wq3KCXTyL4FKZYmXRzBwj81QWxuxyjyHVWjNTJYSDLmPZkYr2UwDEYyXvwS7NnEfhhnkjNKdGKFncF

@@ -52,7 +52,7 @@ class UserSettings {
 
   /** Get address check count (10 or 20) */
   public getAddressCheckCount(): number {
-    return storage.getNumber(KEY_ADDRESS_CHECK_COUNT) ?? 10;
+    return storage.getNumber(KEY_ADDRESS_CHECK_COUNT) ?? 1;
   }
 
   /** Set address check count */

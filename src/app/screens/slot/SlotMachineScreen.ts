@@ -186,6 +186,8 @@ export class SlotMachineScreen extends Container {
       onSpinStart: () => this.startReelAnimations(),
       onWordsChange: (words) => this.updateReelWords(words),
       onActivityFound: (result) => {
+        // Play win sound when BTC activity is found!
+        engine().audio.sfx.play("main/sounds/sfx-win.wav", { volume: 0.8 });
         this.btcResults.showActivityFound(result);
         this.autoplayToggle.active = false;
       },
@@ -270,6 +272,9 @@ export class SlotMachineScreen extends Container {
 
   private async startReelAnimations() {
     const newWords = this.game.getWords();
+    
+    // Play spin sound
+    engine().audio.sfx.play("main/sounds/sfx-run.wav", { volume: 0.5 });
     
     // Start all unlocked reels spinning
     for (const reel of this.reels) {
@@ -419,8 +424,8 @@ export class SlotMachineScreen extends Container {
   }
 
   public async show(): Promise<void> {
-    // Optional: Play background music
-    // engine().audio.bgm.play("main/sounds/bgm-main.mp3", { volume: 0.3 });
+    // Play casino background music
+    engine().audio.bgm.play("main/sounds/bgm-casino.mp3", { volume: 0.4 });
 
     // Animate elements in
     const elementsToAnimate = [
