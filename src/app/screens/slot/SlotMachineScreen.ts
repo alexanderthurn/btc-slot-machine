@@ -23,6 +23,9 @@ export class SlotMachineScreen extends Container {
   private reels: Reel[] = [];
   private controlsContainer: Container;
   private spinButton: SpinButton;
+  private testButton: Container;
+  private testButtonBg: Graphics;
+  private testButtonText: Text;
   private autoplayToggle: AutoplayToggle;
   private btcResults: BTCResults;
   private settingsButton: FancyButton;
@@ -113,6 +116,37 @@ export class SlotMachineScreen extends Container {
     });
     this.controlsContainer.addChild(this.spinButton);
 
+    // Test button (small, subtle)
+    this.testButton = new Container();
+    this.testButtonBg = new Graphics();
+    this.testButtonBg.roundRect(-40, -15, 80, 30, 6);
+    this.testButtonBg.fill({ color: 0x333333 });
+    this.testButtonBg.stroke({ color: 0x555555, width: 1 });
+    this.testButton.addChild(this.testButtonBg);
+    
+    this.testButtonText = new Text({
+      text: "TEST",
+      style: {
+        fontFamily: "Arial, sans-serif",
+        fontSize: 12,
+        fontWeight: "bold",
+        fill: 0x888888,
+      },
+    });
+    this.testButtonText.anchor.set(0.5);
+    this.testButton.addChild(this.testButtonText);
+    
+    this.testButton.eventMode = "static";
+    this.testButton.cursor = "pointer";
+    this.testButton.on("pointerdown", () => this.handleTestMode());
+    this.testButton.on("pointerover", () => {
+      this.testButtonText.style.fill = 0xF7931A;
+    });
+    this.testButton.on("pointerout", () => {
+      this.testButtonText.style.fill = this.game.testMode ? 0xF7931A : 0x888888;
+    });
+    this.controlsContainer.addChild(this.testButton);
+
     // Autoplay toggle
     this.autoplayToggle = new AutoplayToggle({
       onToggle: (active) => this.handleAutoplayToggle(active),
@@ -147,9 +181,21 @@ export class SlotMachineScreen extends Container {
     this.game.setEvents({
       onStateChange: (state) => this.handleStateChange(state),
       onCheckStart: (count) => this.btcResults.showChecking(count),
+      onCheckProgress: (checked, total) => this.btcResults.updateProgress(checked, total),
       onCheckComplete: (result) => this.btcResults.showResults(result),
       onSpinStart: () => this.startReelAnimations(),
+      onWordsChange: (words) => this.updateReelWords(words),
+      onActivityFound: (result) => {
+        this.btcResults.showActivityFound(result);
+        this.autoplayToggle.active = false;
+      },
     });
+  }
+
+  private updateReelWords(words: string[]) {
+    for (let i = 0; i < 12; i++) {
+      this.reels[i].word = words[i];
+    }
   }
 
   private handleStateChange(state: GameState) {
@@ -176,9 +222,49 @@ export class SlotMachineScreen extends Container {
     
     // Update reel targets
     for (let i = 0; i < 12; i++) {
-      if (!this.game.isLocked(i)) {
-        this.reels[i].word = newWords[i];
-      }
+      this.reels[i].word = newWords[i];
+    }
+  }
+
+  private handleTestMode() {
+    const newTestMode = !this.game.testMode;
+    this.game.setTestMode(newTestMode);
+    
+    // Update button appearance
+    this.testButtonText.style.fill = newTestMode ? 0xF7931A : 0x888888;
+    this.testButtonBg.clear();
+    this.testButtonBg.roundRect(-40, -15, 80, 30, 6);
+    this.testButtonBg.fill({ color: newTestMode ? 0x2a1a0a : 0x333333 });
+    this.testButtonBg.stroke({ color: newTestMode ? 0xF7931A : 0x555555, width: 1 });
+    
+    // Update reels with test mnemonic words
+    const words = this.game.getWords();
+    for (let i = 0; i < 12; i++) {
+      this.reels[i].word = words[i];
+      this.reels[i].locked = false;
+    }
+    
+    if (newTestMode) {
+      this.btcResults.showReady();
+      // Show a hint
+      const hint = new Text({
+        text: "Test mode: Using 'abandon' mnemonic with known activity",
+        style: {
+          fontFamily: "Arial, sans-serif",
+          fontSize: 11,
+          fill: 0xF7931A,
+        },
+      });
+      hint.anchor.set(0.5);
+      hint.x = this.btcResults.x;
+      hint.y = this.btcResults.y + 60;
+      this.addChild(hint);
+      
+      setTimeout(() => {
+        animate(hint, { alpha: 0 }, { duration: 0.5 }).then(() => {
+          hint.destroy();
+        });
+      }, 3000);
     }
   }
 
@@ -195,8 +281,8 @@ export class SlotMachineScreen extends Container {
     // Stop reels with staggered timing
     const stopPromises = this.reels.map((reel, i) => {
       if (!this.game.isLocked(reel.index)) {
-        // Stagger stop times: 800ms base + 100ms per reel
-        const delay = 800 + i * 100;
+        // Stagger stop times: 600ms base + 80ms per reel
+        const delay = 600 + i * 80;
         return reel.stopSpin(newWords[reel.index], delay);
       }
       return Promise.resolve();
@@ -248,6 +334,7 @@ export class SlotMachineScreen extends Container {
       this.reels[i].word = this.game.getWord(i);
       this.reels[i].locked = false;
     }
+    this.testButtonText.style.fill = 0x888888;
   }
 
   public resize(width: number, height: number) {
@@ -317,12 +404,17 @@ export class SlotMachineScreen extends Container {
     this.spinButton.x = centerX;
     this.spinButton.y = controlsY;
 
-    this.autoplayToggle.x = centerX - 130;
-    this.autoplayToggle.y = controlsY + 65;
+    // Autoplay toggle below spin button, left side
+    this.autoplayToggle.x = centerX - 70;
+    this.autoplayToggle.y = controlsY + 55;
 
-    // BTC Results
+    // Test button below spin button, right side
+    this.testButton.x = centerX + 70;
+    this.testButton.y = controlsY + 55;
+
+    // BTC Results - give more space for detailed results
     this.btcResults.x = centerX;
-    this.btcResults.y = controlsY + 140;
+    this.btcResults.y = controlsY + 180;
     this.btcResults.resize(width);
   }
 
@@ -336,6 +428,7 @@ export class SlotMachineScreen extends Container {
       this.settingsButton,
       this.reelsContainer,
       this.spinButton,
+      this.testButton,
       this.autoplayToggle,
     ];
 
@@ -385,4 +478,3 @@ export class SlotMachineScreen extends Container {
     super.destroy();
   }
 }
-

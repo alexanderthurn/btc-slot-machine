@@ -1,113 +1,221 @@
 /**
- * Mock BTC Address Checker
- * This will be replaced with actual API calls later
+ * BTC Address Checker using real cryptography and mempool.space API
  */
+import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
+import { wordlist } from "@scure/bip39/wordlists/english.js";
+import { HDKey } from "@scure/bip32";
+import * as btc from "@scure/btc-signer";
+import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 
-export interface BTCMatch {
+// Test mnemonic (abandon x12) - has historical activity for testing
+export const TEST_MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+export interface AddressInfo {
   address: string;
-  balance: number;
+  privateKeyWIF: string;
   derivationPath: string;
-  addressIndex: number;
+  balance: number;
+  totalReceived: number;
+  txCount: number;
 }
 
 export interface BTCCheckResult {
-  seedPhrase: string[];
-  addressesChecked: number;
-  derivationPaths: string[];
-  matches: BTCMatch[];
+  mnemonic: string;
+  seedHex: string;
+  masterPrivateKey: string;
+  addressesChecked: AddressInfo[];
+  totalBalance: number;
+  totalReceived: number;
+  hasActivity: boolean;
   isChecking: boolean;
+  error?: string;
 }
 
 // Common BTC derivation paths
 export const DERIVATION_PATHS = {
-  LEGACY: "m/44'/0'/0'/0", // Legacy (P2PKH)
-  SEGWIT_NATIVE: "m/84'/0'/0'/0", // Native SegWit (P2WPKH)
-  SEGWIT_COMPAT: "m/49'/0'/0'/0", // SegWit Compatible (P2SH-P2WPKH)
+  BIP44_LEGACY: "m/44'/0'/0'/0", // Legacy (P2PKH) - starts with 1
+  BIP84_SEGWIT: "m/84'/0'/0'/0", // Native SegWit (P2WPKH) - starts with bc1q
+  BIP49_SEGWIT_COMPAT: "m/49'/0'/0'/0", // SegWit Compatible (P2SH-P2WPKH) - starts with 3
 };
 
 /**
- * Generate a mock BTC address (for display purposes only)
- * @param derivationPath The derivation path
- * @param index The address index
- * @returns A mock BTC address string
+ * Generate a new random mnemonic
  */
-function generateMockAddress(derivationPath: string, _index: number): string {
-  // Generate different address formats based on derivation path
-  const chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  let address = "";
-  
-  if (derivationPath.includes("84'")) {
-    // Native SegWit (bc1...)
-    address = "bc1q";
-    for (let i = 0; i < 38; i++) {
-      address += chars[Math.floor(Math.random() * chars.length)];
-    }
-  } else if (derivationPath.includes("49'")) {
-    // SegWit Compatible (3...)
-    address = "3";
-    for (let i = 0; i < 33; i++) {
-      address += chars[Math.floor(Math.random() * chars.length)];
-    }
-  } else {
-    // Legacy (1...)
-    address = "1";
-    for (let i = 0; i < 33; i++) {
-      address += chars[Math.floor(Math.random() * chars.length)];
-    }
-  }
-  
-  return address;
+export function generateNewMnemonic(): string {
+  return generateMnemonic(wordlist, 128); // 128 bits = 12 words
 }
 
 /**
- * Mock implementation of BTC address checking
- * Returns random results for demonstration purposes
- * 
- * @param seedPhrase Array of 12 BIP39 words
- * @param addressCount Number of addresses to check per derivation path
- * @returns Promise<BTCCheckResult>
+ * Validate a mnemonic phrase
  */
-export async function checkBTCAddresses(
-  seedPhrase: string[],
-  addressCount: number = 10
-): Promise<BTCCheckResult> {
-  // Simulate network delay
-  await new Promise(resolve => setTimeout(resolve, 1500 + Math.random() * 1000));
+export function isValidMnemonic(mnemonic: string): boolean {
+  return validateMnemonic(mnemonic, wordlist);
+}
+
+/**
+ * Convert mnemonic to seed hex
+ */
+export function mnemonicToSeedHex(mnemonic: string): string {
+  const seed = mnemonicToSeedSync(mnemonic);
+  return bytesToHex(seed);
+}
+
+/**
+ * Derive a BIP44 Legacy address from seed
+ */
+function deriveAddress(seedHex: string, accountPath: string, index: number): { address: string; privateKeyWIF: string; path: string } {
+  const seed = hexToBytes(seedHex);
+  const hdKey = HDKey.fromMasterSeed(seed);
   
-  const derivationPaths = [
-    DERIVATION_PATHS.LEGACY,
-    DERIVATION_PATHS.SEGWIT_NATIVE,
-  ];
+  // Derive the key
+  const fullPath = `${accountPath}/${index}`;
+  const derived = hdKey.derive(fullPath);
   
-  const matches: BTCMatch[] = [];
-  
-  // 3% chance of finding BTC (for demo excitement)
-  const foundBTC = Math.random() < 0.03;
-  
-  if (foundBTC) {
-    const randomPath = derivationPaths[Math.floor(Math.random() * derivationPaths.length)];
-    const randomIndex = Math.floor(Math.random() * addressCount);
-    const randomBalance = Math.random() * 2; // 0-2 BTC
-    
-    matches.push({
-      address: generateMockAddress(randomPath, randomIndex),
-      balance: parseFloat(randomBalance.toFixed(8)),
-      derivationPath: randomPath,
-      addressIndex: randomIndex,
-    });
+  if (!derived.privateKey) {
+    throw new Error("Failed to derive private key");
   }
+
+  // Get the address based on path type
+  let address: string;
   
+  if (accountPath.startsWith("m/84'")) {
+    // Native SegWit (P2WPKH)
+    const payment = btc.p2wpkh(derived.publicKey!);
+    address = payment.address!;
+  } else if (accountPath.startsWith("m/49'")) {
+    // SegWit Compatible (P2SH-P2WPKH)
+    const p2wpkh = btc.p2wpkh(derived.publicKey!);
+    const payment = btc.p2sh(p2wpkh);
+    address = payment.address!;
+  } else {
+    // Legacy (P2PKH)
+    const payment = btc.p2pkh(derived.publicKey!);
+    address = payment.address!;
+  }
+
+  // Convert private key to WIF
+  const privateKeyWIF = btc.WIF().encode(derived.privateKey);
+
   return {
-    seedPhrase,
-    addressesChecked: addressCount * derivationPaths.length,
-    derivationPaths,
-    matches,
-    isChecking: false,
+    address,
+    privateKeyWIF,
+    path: fullPath,
   };
 }
 
 /**
- * Format satoshis to BTC
+ * Get master private key (xprv) from seed
+ */
+export function getMasterPrivateKey(seedHex: string): string {
+  const seed = hexToBytes(seedHex);
+  const hdKey = HDKey.fromMasterSeed(seed);
+  return hdKey.privateExtendedKey;
+}
+
+/**
+ * Fetch address info from mempool.space API
+ */
+async function fetchAddressInfo(address: string): Promise<{ balance: number; totalReceived: number; txCount: number }> {
+  try {
+    const response = await fetch(`https://mempool.space/api/address/${address}`);
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+    const data = await response.json();
+    
+    const balance = (data.chain_stats.funded_txo_sum - data.chain_stats.spent_txo_sum) + 
+                    (data.mempool_stats.funded_txo_sum - data.mempool_stats.spent_txo_sum);
+    const totalReceived = data.chain_stats.funded_txo_sum + data.mempool_stats.funded_txo_sum;
+    const txCount = data.chain_stats.tx_count + data.mempool_stats.tx_count;
+    
+    return { balance, totalReceived, txCount };
+  } catch (error) {
+    console.error(`Error fetching address ${address}:`, error);
+    return { balance: 0, totalReceived: 0, txCount: 0 };
+  }
+}
+
+/**
+ * Check BTC addresses for a given mnemonic
+ */
+export async function checkBTCAddresses(
+  mnemonic: string,
+  addressCount: number = 10,
+  onProgress?: (checked: number, total: number) => void
+): Promise<BTCCheckResult> {
+  const result: BTCCheckResult = {
+    mnemonic,
+    seedHex: "",
+    masterPrivateKey: "",
+    addressesChecked: [],
+    totalBalance: 0,
+    totalReceived: 0,
+    hasActivity: false,
+    isChecking: true,
+  };
+
+  try {
+    // Convert mnemonic to seed
+    result.seedHex = mnemonicToSeedHex(mnemonic);
+    result.masterPrivateKey = getMasterPrivateKey(result.seedHex);
+
+    // Check addresses for multiple derivation paths
+    const paths = [DERIVATION_PATHS.BIP44_LEGACY, DERIVATION_PATHS.BIP84_SEGWIT];
+    let checkedCount = 0;
+    const totalToCheck = paths.length * addressCount;
+
+    for (const basePath of paths) {
+      for (let i = 0; i < addressCount; i++) {
+        const { address, privateKeyWIF, path } = deriveAddress(result.seedHex, basePath, i);
+        
+        // Fetch balance from API
+        const { balance, totalReceived, txCount } = await fetchAddressInfo(address);
+        
+        const addressInfo: AddressInfo = {
+          address,
+          privateKeyWIF,
+          derivationPath: path,
+          balance,
+          totalReceived,
+          txCount,
+        };
+        
+        result.addressesChecked.push(addressInfo);
+        result.totalBalance += balance;
+        result.totalReceived += totalReceived;
+        
+        if (totalReceived > 0 || balance > 0) {
+          result.hasActivity = true;
+        }
+
+        checkedCount++;
+        onProgress?.(checkedCount, totalToCheck);
+
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+  } catch (error) {
+    result.error = error instanceof Error ? error.message : "Unknown error";
+    console.error("BTC check error:", error);
+  }
+
+  result.isChecking = false;
+  return result;
+}
+
+/**
+ * Quick check - only checks first address of each path
+ */
+export async function quickCheckBTCAddresses(
+  mnemonic: string,
+  onProgress?: (checked: number, total: number) => void
+): Promise<BTCCheckResult> {
+  return checkBTCAddresses(mnemonic, 1, onProgress);
+}
+
+/**
+ * Format satoshis to BTC string
  */
 export function satoshisToBTC(satoshis: number): string {
   return (satoshis / 100000000).toFixed(8);
@@ -116,7 +224,22 @@ export function satoshisToBTC(satoshis: number): string {
 /**
  * Format BTC with proper decimals
  */
-export function formatBTC(btc: number): string {
-  return btc.toFixed(8) + " BTC";
+export function formatBTC(satoshis: number): string {
+  return satoshisToBTC(satoshis) + " BTC";
 }
 
+/**
+ * Truncate address for display
+ */
+export function truncateAddress(address: string, chars: number = 8): string {
+  if (address.length <= chars * 2 + 3) return address;
+  return `${address.slice(0, chars)}...${address.slice(-chars)}`;
+}
+
+/**
+ * Truncate WIF for display
+ */
+export function truncateWIF(wif: string, chars: number = 6): string {
+  if (wif.length <= chars * 2 + 3) return wif;
+  return `${wif.slice(0, chars)}...${wif.slice(-chars)}`;
+}
