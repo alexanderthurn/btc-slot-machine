@@ -1,0 +1,474 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <cstdint>
+#include <iomanip>
+#include <filesystem>
+#include <algorithm>
+#include <cstring>
+#include <cstdlib>
+
+using namespace std;
+
+// ==============================================================================
+// 1. Core Logic from xr.cpp (FNV Hash and Lookup Table)
+// ==============================================================================
+// We include the actual xr.cpp file here. This ensures that if the other 
+// developer updates xr.cpp, main.cpp automatically inherits the new hashing logic!
+// We use a small #define trick to temporarily rename xr.cpp's "main()" function, 
+// so the compiler doesn't complain about having two main functions.
+#define main xr_standalone_main
+#include "xr.cpp"
+#undef main
+
+// ==============================================================================
+// 2. Helper Functions (Decoders, Parsers)
+// ==============================================================================
+vector<uint8_t> hexToBytes(const string& hex) {
+    vector<uint8_t> bytes;
+    for (size_t i = 0; i < hex.length(); i += 2) {
+        string byteString = hex.substr(i, 2);
+        uint8_t byte = (uint8_t) strtol(byteString.c_str(), nullptr, 16);
+        bytes.push_back(byte);
+    }
+    return bytes;
+}
+
+string toHex(const vector<uint8_t>& data) {
+    string s;
+    s.reserve(data.size() * 2);
+    static constexpr char hx[] = "0123456789abcdef";
+    for(uint8_t b : data) {
+        s.push_back(hx[b >> 4]);
+        s.push_back(hx[b & 0xF]);
+    }
+    return s;
+}
+
+// Converts a Base58 Bitcoin Address to its raw bytes (removes Base58 encoding)
+vector<uint8_t> decodeBase58(const string& b58) {
+    static const string ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    vector<uint8_t> bytes(b58.length() * 733 / 1000 + 1, 0); 
+    size_t length = 0;
+    
+    for (char c : b58) {
+        size_t id = ALPHABET.find(c);
+        if (id == string::npos) return {}; // Invalid character
+        uint32_t val = id;
+        
+        size_t j = 0;
+        for (auto it = bytes.rbegin(); (val != 0 || j < length) && (it != bytes.rend()); ++it, ++j) {
+            val += 58 * (*it);
+            *it = val % 256;
+            val /= 256;
+        }
+        length = j;
+    }
+    
+    int zeros = 0;
+    while (zeros < b58.size() && b58[zeros] == '1') zeros++;
+    
+    auto it = bytes.begin();
+    while (it != bytes.end() && *it == 0) it++;
+    
+    vector<uint8_t> result;
+    result.assign(zeros, 0);
+    result.insert(result.end(), it, bytes.end());
+    
+    return result;
+}
+
+uint64_t readVarInt(ifstream& file) {
+    uint8_t first;
+    if (!file.read(reinterpret_cast<char*>(&first), 1)) return 0;
+    if (first < 0xFD) return first;
+    if (first == 0xFD) {
+        uint16_t v;
+        file.read(reinterpret_cast<char*>(&v), 2);
+        return v;
+    }
+    if (first == 0xFE) {
+        uint32_t v;
+        file.read(reinterpret_cast<char*>(&v), 4);
+        return v;
+    }
+    uint64_t v;
+    file.read(reinterpret_cast<char*>(&v), 8);
+    return v;
+}
+
+// ==============================================================================
+// 3. Command: Download
+// ==============================================================================
+void cmdDownload() {
+    cout << "Starting download of sample block files...\n";
+    string targetDir = "blocks";
+    if (!filesystem::exists(targetDir)) filesystem::create_directory(targetDir);
+    
+    vector<string> files = {"blk00000.dat", "blk00021.dat", "blk05000.dat"};
+    string baseUrl = "http://alexander-thurn.de/temp/blocks/";
+    
+    for (const auto &file : files) {
+        cout << "Downloading " << file << "...\n";
+        string url = baseUrl + file;
+        string targetPath = targetDir + "/" + file;
+        string command = "curl -L -f -s -o " + targetPath + " " + url;
+        
+        int r = system(command.c_str());
+        if (r == 0) cout << "Successfully downloaded: " << file << "\n";
+        else cerr << "Error downloading " << file << " (Curl Code: " << r << ")\n";
+    }
+    cout << "Download process finished.\n";
+}
+
+// ==============================================================================
+// 4. Command: Parse
+// ==============================================================================
+void cmdParse(int chunk_index, bool debug) {
+    int files_per_chunk = 1000;
+    int start_file = chunk_index * files_per_chunk;
+    int end_file = start_file + files_per_chunk - 1;
+    
+    string blocksDir = "blocks";
+    if (!filesystem::exists(blocksDir)) {
+        cerr << "Directory 'blocks' not found!\n";
+        return;
+    }
+
+    string outDir = "chunks";
+    if (!filesystem::exists(outDir)) filesystem::create_directory(outDir);
+    
+    string outFilename = outDir + "/chunk_" + to_string(chunk_index) + ".bin";
+    ofstream outFile(outFilename, ios::binary);
+    if (!outFile) {
+        cerr << "Could not create output file " << outFilename << "\n";
+        return;
+    }
+
+    vector<string> datFiles;
+    vector<int> missingFiles;
+    int expectedIndex = start_file;
+
+    for (const auto& entry : filesystem::directory_iterator(blocksDir)) {
+        if (entry.path().extension() == ".dat") {
+            string filename = entry.path().filename().string();
+            if (filename.length() == 12 && filename.substr(0, 3) == "blk") {
+                try {
+                    int fileIndex = stoi(filename.substr(3, 5));
+                    if (fileIndex >= start_file && fileIndex <= end_file) {
+                        datFiles.push_back(entry.path().string());
+                    }
+                } catch (...) {}
+            }
+        }
+    }
+    sort(datFiles.begin(), datFiles.end());
+
+    if (datFiles.empty()) {
+        cout << "[WARNING] No .dat files found for Chunk " << chunk_index 
+             << " (Expected files blk" << setfill('0') << setw(5) << start_file 
+             << ".dat to blk" << setfill('0') << setw(5) << end_file << ".dat)\n";
+        return;
+    }
+
+    for (const string& filepath : datFiles) {
+        string filename = filesystem::path(filepath).filename().string();
+        int fileIndex = stoi(filename.substr(3, 5));
+        if (fileIndex != expectedIndex) {
+            for (int i = expectedIndex; i < fileIndex && missingFiles.size() < 3; i++) {
+                missingFiles.push_back(i);
+            }
+        }
+        expectedIndex = fileIndex + 1;
+    }
+    
+    if (!missingFiles.empty()) {
+        cout << "[WARNING] Missing .dat files detected in this chunk (e.g. blk" 
+             << setfill('0') << setw(5) << missingFiles[0] << ".dat";
+        if (missingFiles.size() > 1) {
+            cout << ", blk" << setfill('0') << setw(5) << missingFiles[1] << ".dat";
+        }
+        cout << "...)\nScript parses available files exactly as they are.\n\n";
+    }
+
+    cout << "Extracting Chunk " << chunk_index << " (Files blk" 
+         << setfill('0') << setw(5) << start_file << ".dat to blk" 
+         << setfill('0') << setw(5) << end_file << ".dat)\n";
+
+    uint64_t total_payloads_written = 0;
+    uint64_t count_p2pkh = 0;
+    uint64_t count_p2sh = 0;
+    uint64_t count_p2wpkh = 0;
+
+    for (const string& filepath : datFiles) {
+        ifstream file(filepath, ios::binary);
+        if (!file) continue;
+
+        string filename = filesystem::path(filepath).filename().string();
+        if (!debug) cout << "Parsing file " << filename << "...\n" << flush;
+
+        uint32_t magic, blockSize;
+        while (file.read(reinterpret_cast<char*>(&magic), 4)) {
+            if (magic != 0xD9B4BEF9) {
+                file.seekg(-3, ios::cur);
+                continue;
+            }
+            if (!file.read(reinterpret_cast<char*>(&blockSize), 4)) break;
+
+            auto blockStart = file.tellg();
+            
+            file.seekg(80, ios::cur);
+            uint64_t txCount = readVarInt(file);
+            
+            for (uint64_t t = 0; t < txCount; ++t) {
+                uint32_t version;
+                file.read(reinterpret_cast<char*>(&version), 4);
+                
+                bool isSegWit = false;
+                uint8_t markerCheck[2];
+                auto currentPos = file.tellg();
+                if (file.read(reinterpret_cast<char*>(markerCheck), 2)) {
+                    if (markerCheck[0] == 0x00 && markerCheck[1] == 0x01) {
+                        isSegWit = true;
+                    } else {
+                        file.seekg(currentPos);
+                    }
+                }
+                
+                uint64_t inCount = readVarInt(file);
+                for (uint64_t i = 0; i < inCount; ++i) {
+                    file.seekg(36, ios::cur);
+                    uint64_t scriptLen = readVarInt(file);
+                    file.seekg(scriptLen, ios::cur);
+                    file.seekg(4, ios::cur);
+                }
+                
+                uint64_t outCount = readVarInt(file);
+                for (uint64_t i = 0; i < outCount; ++i) {
+                    uint64_t value;
+                    file.read(reinterpret_cast<char*>(&value), 8);
+                    
+                    uint64_t scriptLen = readVarInt(file);
+                    vector<uint8_t> script(scriptLen);
+                    file.read(reinterpret_cast<char*>(script.data()), scriptLen);
+
+                    if (value == 0) continue;
+
+                    if (scriptLen == 25 && script[0] == 0x76 && script[1] == 0xa9 && script[2] == 0x14 && script[23] == 0x88 && script[24] == 0xac) {
+                        outFile.write(reinterpret_cast<char*>(script.data() + 3), 20);
+                        if(debug && count_p2pkh < 3) cout << "[DEBUG] " << filename << " | Found P2PKH Hash160: " << toHex(vector<uint8_t>(script.begin()+3, script.begin()+23)) << "\n";
+                        count_p2pkh++;
+                        total_payloads_written++;
+                    } else if (scriptLen == 23 && script[0] == 0xa9 && script[1] == 0x14 && script[22] == 0x87) {
+                        outFile.write(reinterpret_cast<char*>(script.data() + 2), 20);
+                        if(debug && count_p2sh < 3) cout << "[DEBUG] " << filename << " | Found P2SH Hash160: " << toHex(vector<uint8_t>(script.begin()+2, script.begin()+22)) << "\n";
+                        count_p2sh++;
+                        total_payloads_written++;
+                    } else if (scriptLen == 22 && script[0] == 0x00 && script[1] == 0x14) {
+                        outFile.write(reinterpret_cast<char*>(script.data() + 2), 20);
+                        if(debug && count_p2wpkh < 3) cout << "[DEBUG] " << filename << " | Found P2WPKH Hash160: " << toHex(vector<uint8_t>(script.begin()+2, script.begin()+22)) << "\n";
+                        count_p2wpkh++;
+                        total_payloads_written++;
+                    }
+                }
+                
+                if (isSegWit) {
+                    for (uint64_t i = 0; i < inCount; ++i) {
+                        uint64_t witnessItems = readVarInt(file);
+                        for (uint64_t w = 0; w < witnessItems; ++w) {
+                            uint64_t itemLen = readVarInt(file);
+                            file.seekg(itemLen, ios::cur);
+                        }
+                    }
+                }
+                
+                file.seekg(4, ios::cur);
+            }
+            file.seekg(blockStart + static_cast<streamoff>(blockSize));
+        }
+    }
+
+    cout << "\n\nDone! Saved chunk " << chunk_index << ".\n";
+    cout << "Extracted a total of " << total_payloads_written << " addresses (20-byte chunks)\n";
+    cout << "  - P2PKH:  " << count_p2pkh << "\n";
+    cout << "  - P2SH:   " << count_p2sh << "\n";
+    cout << "  - P2WPKH: " << count_p2wpkh << "\n";
+}
+
+// ==============================================================================
+// 5. Command: Build
+// ==============================================================================
+void cmdBuild() {
+    cout << "Allocating " << (1ull << (hashTabBitsExp - 23)) << " MB for the Bloom Filter / Hash Table in RAM...\n";
+    uint64_t arraySize = 1ull << (hashTabBitsExp > tabS ? hashTabBitsExp - tabS : 0);
+    TTab* preLookup = new TTab[arraySize]();
+
+    string chunksDir = "chunks";
+    if (!filesystem::exists(chunksDir)) {
+        cerr << "Directory 'chunks' not found!\n";
+        return;
+    }
+
+    uint64_t totalKeysProcessed = 0;
+    for (const auto& entry : filesystem::directory_iterator(chunksDir)) {
+        if (entry.path().extension() == ".bin") {
+            cout << "Reading " << entry.path().filename() << "..." << flush;
+            ifstream file(entry.path().string(), ios::binary);
+            if (!file) continue;
+
+            TKey keyBuffer;
+            uint64_t keysInFile = 0;
+            while (file.read(reinterpret_cast<char*>(&keyBuffer), keyBytes)) {
+                setKey(preLookup, keyBuffer);
+                keysInFile++;
+            }
+            totalKeysProcessed += keysInFile;
+            cout << " (" << keysInFile << " payloads processed)\n";
+        }
+    }
+
+    cout << "\nTotal 20-byte addresses mapped: " << totalKeysProcessed << "\n";
+    
+    string outFilename = "final_filter_table.bin";
+    cout << "Writing final hash array to " << outFilename << "...\n";
+    
+    ofstream outFile(outFilename, ios::binary);
+    outFile.write(reinterpret_cast<const char*>(preLookup), arraySize * sizeof(TTab));
+    outFile.close();
+
+    delete[] preLookup;
+    cout << "Done! Loaded final array into " << outFilename << " for the web game.\n";
+}
+
+// ==============================================================================
+// 6. Command: Test (Uses the final_filter_table.bin)
+// ==============================================================================
+void cmdTest(const string& input) {
+    string filterFilename = "final_filter_table.bin";
+    ifstream file(filterFilename, ios::binary);
+    if (!file) {
+        cerr << "[ERROR] Could not load " << filterFilename << ". Run 'build' first!\n";
+        return;
+    }
+
+    cout << "Loading 512MB filter into RAM...\n";
+    uint64_t arraySize = 1ull << (hashTabBitsExp > tabS ? hashTabBitsExp - tabS : 0);
+    TTab* preLookup = new TTab[arraySize]();
+    if (!file.read(reinterpret_cast<char*>(preLookup), arraySize * sizeof(TTab))) {
+        cerr << "[ERROR] Corrupted or incomplete filter table.\n";
+        delete[] preLookup;
+        return;
+    }
+
+    vector<uint8_t> payload;
+
+    // Is it a 40-char Hex String? (Hash160)
+    if (input.length() == 40) {
+        payload = hexToBytes(input);
+        cout << "Detected 20-byte Hash160 (Hex format).\n";
+    } 
+    // Is it a Base58 Address? (P2PKH -> starts with 1, P2SH -> starts with 3)
+    else if (input[0] == '1' || input[0] == '3') {
+        vector<uint8_t> decoded = decodeBase58(input);
+        if (decoded.size() < 25) {
+            cerr << "[ERROR] Invalid Base58 address length.\n";
+            delete[] preLookup;
+            return;
+        }
+        // Base58Check has 1 byte version + 20 bytes hash + 4 bytes checksum
+        payload.assign(decoded.begin() + 1, decoded.begin() + 21);
+        cout << "Detected Base58 Address. Extracted 20-byte payload: " << toHex(payload) << "\n";
+    } 
+    // Is it a raw Public Key? (33 bytes compressed = 66 hex chars, 65 bytes uncompressed = 130 hex chars)
+    else if (input.length() == 66 || input.length() == 130) {
+        cerr << "[INFO] This script expects 20-byte Hash160s (Addresses).\n";
+        cerr << "Your input appears to be a raw Public Key. You must compute SHA256 -> RIPEMD160 \n";
+        cerr << "on this Public Key first to get the 20-byte address payload before testing it.\n";
+        delete[] preLookup;
+        return;
+    }
+    else {
+        cerr << "[ERROR] Unrecognized format. Please pass a Base58 Address (1...) or a 40-char Hex (Hash160).\n";
+        delete[] preLookup;
+        return;
+    }
+
+    // Checking the filter
+    TKey keyBuffer;
+    for (int i = 0; i < 20; ++i) keyBuffer[i] = payload[i];
+
+    bool found = testKey(preLookup, keyBuffer);
+    cout << "\n----------------------------------------\n";
+    if (found) {
+        cout << "[SUCCESS] YES! This address/hash was found in the filter!\n";
+        cout << "          (It once had a balance on the Bitcoin Blockchain)\n";
+    } else {
+        cout << "[FAILURE] NO. This address/hash is definitively NOT in the filter.\n";
+    }
+    cout << "----------------------------------------\n";
+
+    delete[] preLookup;
+}
+
+// ==============================================================================
+// CLI Parser
+// ==============================================================================
+void printHelp() {
+    cout << "BTC Slot Machine - Preprocessing Tool\n";
+    cout << "======================================\n\n";
+    cout << "Commands:\n";
+    cout << "  download                 Downloads initial blk*.dat files from the web.\n";
+    cout << "  parse <index> [--debug]  Parses a 1000-block chunk and extracts Hash160 payloads.\n";
+    cout << "                           The --debug flag will print every parsed address.\n";
+    cout << "  build                    Compresses all chunks into the final 'final_filter_table.bin'.\n";
+    cout << "  test <address_or_hash>   Loads the 512MB filter into RAM and verifies an address.\n";
+    cout << "                           Accepts: Base58 Address (1A1zP...) or 40-char Hex string.\n";
+    cout << "\nExamples:\n";
+    cout << "  ./main parse 0 --debug\n";
+    cout << "  ./main build\n";
+    cout << "  ./main test 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa\n";
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        printHelp();
+        return 1;
+    }
+
+    string command = argv[1];
+
+    if (command == "download") {
+        cmdDownload();
+    } 
+    else if (command == "parse") {
+        if (argc < 3) {
+            cerr << "Missing chunk index. Example: ./main parse 0\n";
+            return 1;
+        }
+        int chunk_index = stoi(argv[2]);
+        bool debug = false;
+        if (argc >= 4 && string(argv[3]) == "--debug") debug = true;
+        
+        cmdParse(chunk_index, debug);
+    } 
+    else if (command == "build") {
+        cmdBuild();
+    } 
+    else if (command == "test") {
+        if (argc < 3) {
+            cerr << "Missing address or hash element to test.\n";
+            return 1;
+        }
+        cmdTest(string(argv[2]));
+    } 
+    else if (command == "help" || command == "--help" || command == "-h") {
+        printHelp();
+    } 
+    else {
+        cerr << "Unknown command: " << command << "\n";
+        printHelp();
+    }
+
+    return 0;
+}
