@@ -132,12 +132,19 @@ void processChunk(int chunk_index, bool debug) {
     
     string blocksDir = "blocks";
     string outDir = "chunks";
-    string outFilename = outDir + "/chunk_" + to_string(chunk_index) + ".bin";
+    string outLogname = outDir + "/chunk_" + to_string(chunk_index) + ".log";
+    
+    string filterDir = "filter";
+    if (!filesystem::exists(filterDir)) filesystem::create_directory(filterDir);
+    string filterFilename = filterDir + "/final.bin";
 
-    ofstream outFile(outFilename, ios::binary);
-    if (!outFile) {
-        cerr << "Could not create output file " << outFilename << "\n";
-        return;
+    uint64_t arraySize = 1ull << (hashTabBitsExp > tabS ? hashTabBitsExp - tabS : 0);
+    TTab* preLookup = new TTab[arraySize]();
+    
+    ifstream filterIn(filterFilename, ios::binary);
+    if (filterIn) {
+        filterIn.read(reinterpret_cast<char*>(preLookup), arraySize * sizeof(TTab));
+        filterIn.close();
     }
 
     vector<string> datFiles;
@@ -164,9 +171,7 @@ void processChunk(int chunk_index, bool debug) {
              << " (Expected files blk" << setfill('0') << setw(5) << start_file 
              << ".dat to blk" << setfill('0') << setw(5) << end_file << ".dat)\n";
         
-        // Remove empty bin file
-        outFile.close();
-        filesystem::remove(outFilename);
+        delete[] preLookup;
         return;
     }
 
@@ -205,6 +210,10 @@ void processChunk(int chunk_index, bool debug) {
 
         string filename = filesystem::path(filepath).filename().string();
         if (!debug) cout << "Parsing file " << filename << "...\n" << flush;
+
+        bool debug_printed_p2pkh = false;
+        bool debug_printed_p2sh = false;
+        bool debug_printed_p2wpkh = false;
 
         uint32_t magic, blockSize;
         while (file.read(reinterpret_cast<char*>(&magic), 4)) {
@@ -254,18 +263,33 @@ void processChunk(int chunk_index, bool debug) {
                     if (value == 0) continue;
 
                     if (scriptLen == 25 && script[0] == 0x76 && script[1] == 0xa9 && script[2] == 0x14 && script[23] == 0x88 && script[24] == 0xac) {
-                        outFile.write(reinterpret_cast<char*>(script.data() + 3), 20);
-                        if(debug && count_p2pkh < 3) cout << "[DEBUG] " << filename << " | Found P2PKH Hash160: " << toHex(vector<uint8_t>(script.begin()+3, script.begin()+23)) << "\n";
+                        TKey keyBuffer;
+                        memcpy(keyBuffer, script.data() + 3, 20);
+                        setKey(preLookup, keyBuffer);
+                        if(debug && !debug_printed_p2pkh) {
+                            cout << "[DEBUG] " << filename << " | Found P2PKH Hash160: " << toHex(vector<uint8_t>(script.begin()+3, script.begin()+23)) << "\n";
+                            debug_printed_p2pkh = true;
+                        }
                         count_p2pkh++;
                         total_payloads_written++;
                     } else if (scriptLen == 23 && script[0] == 0xa9 && script[1] == 0x14 && script[22] == 0x87) {
-                        outFile.write(reinterpret_cast<char*>(script.data() + 2), 20);
-                        if(debug && count_p2sh < 3) cout << "[DEBUG] " << filename << " | Found P2SH Hash160: " << toHex(vector<uint8_t>(script.begin()+2, script.begin()+22)) << "\n";
+                        TKey keyBuffer;
+                        memcpy(keyBuffer, script.data() + 2, 20);
+                        setKey(preLookup, keyBuffer);
+                        if(debug && !debug_printed_p2sh) {
+                            cout << "[DEBUG] " << filename << " | Found P2SH Hash160: " << toHex(vector<uint8_t>(script.begin()+2, script.begin()+22)) << "\n";
+                            debug_printed_p2sh = true;
+                        }
                         count_p2sh++;
                         total_payloads_written++;
                     } else if (scriptLen == 22 && script[0] == 0x00 && script[1] == 0x14) {
-                        outFile.write(reinterpret_cast<char*>(script.data() + 2), 20);
-                        if(debug && count_p2wpkh < 3) cout << "[DEBUG] " << filename << " | Found P2WPKH Hash160: " << toHex(vector<uint8_t>(script.begin()+2, script.begin()+22)) << "\n";
+                        TKey keyBuffer;
+                        memcpy(keyBuffer, script.data() + 2, 20);
+                        setKey(preLookup, keyBuffer);
+                        if(debug && !debug_printed_p2wpkh) {
+                            cout << "[DEBUG] " << filename << " | Found P2WPKH Hash160: " << toHex(vector<uint8_t>(script.begin()+2, script.begin()+22)) << "\n";
+                            debug_printed_p2wpkh = true;
+                        }
                         count_p2wpkh++;
                         total_payloads_written++;
                     }
@@ -287,7 +311,29 @@ void processChunk(int chunk_index, bool debug) {
         }
     }
 
-    cout << "\n\nDone! Saved chunk " << chunk_index << ".\n";
+    cout << "\n\nDone parsing chunk " << chunk_index << "!\n";
+    cout << "Saving updated 512 MB filter to " << filterFilename << "...\n";
+    
+    ofstream filterOut(filterFilename, ios::binary);
+    filterOut.write(reinterpret_cast<const char*>(preLookup), arraySize * sizeof(TTab));
+    filterOut.close();
+    delete[] preLookup;
+
+    cout << "Writing parsing log to " << outLogname << "...\n";
+    ofstream logOut(outLogname);
+    if (datFiles.size() == 1000) {
+        logOut << "Completed\n";
+    } else {
+        logOut << datFiles.size() << "\n";
+    }
+    logOut << "Chunk: " << chunk_index << "\n";
+    logOut << "Processed Files: blk" << setfill('0') << setw(5) << start_file << ".dat to blk" << setfill('0') << setw(5) << end_file << ".dat (" << datFiles.size() << " files)\n";
+    logOut << "Total Payloads Processed: " << total_payloads_written << "\n";
+    logOut << "  - P2PKH:  " << count_p2pkh << "\n";
+    logOut << "  - P2SH:   " << count_p2sh << "\n";
+    logOut << "  - P2WPKH: " << count_p2wpkh << "\n";
+    logOut.close();
+
     cout << "Extracted a total of " << total_payloads_written << " addresses (20-byte chunks)\n";
     cout << "  - P2PKH:  " << count_p2pkh << "\n";
     cout << "  - P2SH:   " << count_p2sh << "\n";
@@ -331,11 +377,25 @@ void cmdParse(int arg_chunk_index, bool debug) {
         int skipped = 0;
 
         for (int i = 0; i <= maxChunk; ++i) {
-            string outFilename = outDir + "/chunk_" + to_string(i) + ".bin";
+            string outFilename = outDir + "/chunk_" + to_string(i) + ".log";
+            bool skipChunk = false;
+            
             if (filesystem::exists(outFilename)) {
-                cout << "[SKIP] Chunk " << i << " already exists (" << outFilename << "). Skipping...\n";
+                ifstream logIn(outFilename);
+                string firstLine;
+                if (getline(logIn, firstLine) && firstLine.find("Completed") != string::npos) {
+                    skipChunk = true;
+                }
+                logIn.close();
+            }
+
+            if (skipChunk) {
+                cout << "[SKIP] Chunk " << i << " is completely parsed. Skipping...\n";
                 skipped++;
             } else {
+                if (filesystem::exists(outFilename)) {
+                    cout << "[REPARSE] Chunk " << i << " was incomplete. Reparsing...\n";
+                }
                 processChunk(i, debug);
                 processed++;
             }
@@ -348,52 +408,16 @@ void cmdParse(int arg_chunk_index, bool debug) {
 // 5. Command: Build
 // ==============================================================================
 void cmdBuild() {
-    cout << "Allocating " << (1ull << (hashTabBitsExp - 23)) << " MB for the Bloom Filter / Hash Table in RAM...\n";
-    uint64_t arraySize = 1ull << (hashTabBitsExp > tabS ? hashTabBitsExp - tabS : 0);
-    TTab* preLookup = new TTab[arraySize]();
-
-    string chunksDir = "chunks";
-    if (!filesystem::exists(chunksDir)) {
-        cerr << "Directory 'chunks' not found!\n";
-        return;
-    }
-
-    uint64_t totalKeysProcessed = 0;
-    for (const auto& entry : filesystem::directory_iterator(chunksDir)) {
-        if (entry.path().extension() == ".bin") {
-            cout << "Reading " << entry.path().filename() << "..." << flush;
-            ifstream file(entry.path().string(), ios::binary);
-            if (!file) continue;
-
-            TKey keyBuffer;
-            uint64_t keysInFile = 0;
-            while (file.read(reinterpret_cast<char*>(&keyBuffer), keyBytes)) {
-                setKey(preLookup, keyBuffer);
-                keysInFile++;
-            }
-            totalKeysProcessed += keysInFile;
-            cout << " (" << keysInFile << " payloads processed)\n";
-        }
-    }
-
-    cout << "\nTotal 20-byte addresses mapped: " << totalKeysProcessed << "\n";
-    
-    string outFilename = "final_filter_table.bin";
-    cout << "Writing final hash array to " << outFilename << "...\n";
-    
-    ofstream outFile(outFilename, ios::binary);
-    outFile.write(reinterpret_cast<const char*>(preLookup), arraySize * sizeof(TTab));
-    outFile.close();
-
-    delete[] preLookup;
-    cout << "Done! Loaded final array into " << outFilename << " for the web game.\n";
+    cout << "[INFO] The 'build' step is no longer necessary!\n";
+    cout << "       The 'parse' command now directly injects all data into 'filter/final.bin'.\n";
+    cout << "       Your 512 MB file is already finished and ready for the web game.\n";
 }
 
 // ==============================================================================
-// 6. Command: Test (Uses the final_filter_table.bin)
+// 6. Command: Test (Uses the final.bin)
 // ==============================================================================
 void cmdTest(const string& input) {
-    string filterFilename = "final_filter_table.bin";
+    string filterFilename = "filter/final.bin";
     ifstream file(filterFilename, ios::binary);
     if (!file) {
         cerr << "[ERROR] Could not load " << filterFilename << ". Run 'build' first!\n";

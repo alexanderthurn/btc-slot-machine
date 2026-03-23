@@ -30,3 +30,5 @@ src/manifest.json
 todo/xr
 todo/download_blocks
 todo/chunks/*.bin
+todo/main
+todo/filter/final.bin
