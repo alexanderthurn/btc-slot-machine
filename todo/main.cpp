@@ -125,21 +125,15 @@ void cmdDownload() {
 // ==============================================================================
 // 4. Command: Parse
 // ==============================================================================
-void cmdParse(int chunk_index, bool debug) {
+void processChunk(int chunk_index, bool debug) {
     int files_per_chunk = 1000;
     int start_file = chunk_index * files_per_chunk;
     int end_file = start_file + files_per_chunk - 1;
     
     string blocksDir = "blocks";
-    if (!filesystem::exists(blocksDir)) {
-        cerr << "Directory 'blocks' not found!\n";
-        return;
-    }
-
     string outDir = "chunks";
-    if (!filesystem::exists(outDir)) filesystem::create_directory(outDir);
-    
     string outFilename = outDir + "/chunk_" + to_string(chunk_index) + ".bin";
+
     ofstream outFile(outFilename, ios::binary);
     if (!outFile) {
         cerr << "Could not create output file " << outFilename << "\n";
@@ -169,6 +163,10 @@ void cmdParse(int chunk_index, bool debug) {
         cout << "[WARNING] No .dat files found for Chunk " << chunk_index 
              << " (Expected files blk" << setfill('0') << setw(5) << start_file 
              << ".dat to blk" << setfill('0') << setw(5) << end_file << ".dat)\n";
+        
+        // Remove empty bin file
+        outFile.close();
+        filesystem::remove(outFilename);
         return;
     }
 
@@ -294,6 +292,56 @@ void cmdParse(int chunk_index, bool debug) {
     cout << "  - P2PKH:  " << count_p2pkh << "\n";
     cout << "  - P2SH:   " << count_p2sh << "\n";
     cout << "  - P2WPKH: " << count_p2wpkh << "\n";
+}
+
+void cmdParse(int arg_chunk_index, bool debug) {
+    string blocksDir = "blocks";
+    if (!filesystem::exists(blocksDir)) {
+        cerr << "Directory 'blocks' not found!\n";
+        return;
+    }
+
+    string outDir = "chunks";
+    if (!filesystem::exists(outDir)) filesystem::create_directory(outDir);
+
+    if (arg_chunk_index != -1) {
+        processChunk(arg_chunk_index, debug);
+    } else {
+        cout << "Scanning 'blocks' directory to evaluate needed chunks...\n";
+        int maxFileIndex = -1;
+        for (const auto& entry : filesystem::directory_iterator(blocksDir)) {
+            if (entry.path().extension() == ".dat") {
+                string filename = entry.path().filename().string();
+                if (filename.length() == 12 && filename.substr(0, 3) == "blk") {
+                    try {
+                        int fileIndex = stoi(filename.substr(3, 5));
+                        maxFileIndex = max(maxFileIndex, fileIndex);
+                    } catch (...) {}
+                }
+            }
+        }
+        
+        if (maxFileIndex == -1) {
+            cout << "[WARNING] No .dat files found in the 'blocks' directory.\n";
+            return;
+        }
+
+        int maxChunk = maxFileIndex / 1000;
+        int processed = 0;
+        int skipped = 0;
+
+        for (int i = 0; i <= maxChunk; ++i) {
+            string outFilename = outDir + "/chunk_" + to_string(i) + ".bin";
+            if (filesystem::exists(outFilename)) {
+                cout << "[SKIP] Chunk " << i << " already exists (" << outFilename << "). Skipping...\n";
+                skipped++;
+            } else {
+                processChunk(i, debug);
+                processed++;
+            }
+        }
+        cout << "\nAll routines finished. Processed: " << processed << " Chunks, Skipped: " << skipped << " Chunks.\n";
+    }
 }
 
 // ==============================================================================
@@ -442,13 +490,18 @@ int main(int argc, char* argv[]) {
         cmdDownload();
     } 
     else if (command == "parse") {
-        if (argc < 3) {
-            cerr << "Missing chunk index. Example: ./main parse 0\n";
-            return 1;
-        }
-        int chunk_index = stoi(argv[2]);
+        int chunk_index = -1; // Default to all
         bool debug = false;
-        if (argc >= 4 && string(argv[3]) == "--debug") debug = true;
+        
+        for (int i = 2; i < argc; ++i) {
+            string arg = argv[i];
+            if (arg == "--debug") debug = true;
+            else {
+                try {
+                    chunk_index = stoi(arg);
+                } catch(...) {}
+            }
+        }
         
         cmdParse(chunk_index, debug);
     } 
