@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitcoin Filter Validator</title>
+    <!-- Google Fonts for sleek aesthetics -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <!-- CryptoJS for offline SHA256 & RIPEMD160 without server load -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --glass: rgba(30, 41, 59, 0.7);
+            --border: rgba(255, 255, 255, 0.15);
+            --btc-orange: #f7931a;
+            --btc-glow: rgba(247, 147, 26, 0.4);
+            --success: #22c55e;
+            --success-glow: rgba(34, 197, 94, 0.4);
+            --error: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            background-color: var(--bg);
+            background-image: 
+                radial-gradient(at 0% 0%, var(--btc-glow) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, var(--glass) 0px, transparent 50%);
+            font-family: 'Inter', sans-serif;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            padding: 20px;
+            box-sizing: border-box;
+            z-index: 2;
+        }
+
+        .glass-card {
+            background: var(--glass);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+            font-weight: 800;
+            font-size: 2.2rem;
+            background: linear-gradient(to right, #fff, #cbd5e1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            margin-bottom: 30px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
+        .input-group {
+            position: relative;
+            margin-bottom: 24px;
+            transition: transform 0.2s;
+        }
+        
+        .input-group:focus-within {
+            transform: scale(1.02);
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 18px 24px;
+            background: rgba(15, 23, 42, 0.8);
+            border: 2px solid var(--border);
+            border-radius: 16px;
+            color: white;
+            font-size: 1.1rem;
+            font-family: monospace;
+            box-sizing: border-box;
+            outline: none;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        input[type="text"]:focus {
+            border-color: var(--btc-orange);
+            box-shadow: 0 0 20px var(--btc-glow);
+        }
+
+        button {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #f7931a, #ea580c);
+            color: white;
+            border: none;
+            border-radius: 16px;
+            font-size: 1.2rem;
+            font-weight: 800;
+            cursor: pointer;
+            box-shadow: 0 4px 15px var(--btc-glow);
+            transition: transform 0.2s, box-shadow 0.2s, filter 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            filter: brightness(1.1);
+            box-shadow: 0 8px 25px var(--btc-glow);
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+
+        button:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            display: none;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .result-box {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 16px;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border);
+            display: none;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.4s ease;
+        }
+
+        .result-box.show {
+            display: block;
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .result-box.success {
+            border-color: var(--success);
+            background: rgba(34, 197, 94, 0.1);
+            box-shadow: 0 0 30px var(--success-glow);
+        }
+
+        .result-box.fail {
+            border-color: var(--error);
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .status-title {
+            font-size: 1.5rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+        }
+
+        .success .status-title { color: var(--success); }
+        .fail .status-title { color: var(--error); }
+
+        .meta-data {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 15px;
+            word-break: break-all;
+            line-height: 1.8;
+            text-align: left;
+            background: rgba(0,0,0,0.3);
+            padding: 15px;
+            border-radius: 12px;
+        }
+        
+        .code {
+            color: #fff;
+            font-family: monospace;
+            background: rgba(255,255,255,0.1);
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+
+        .history-box {
+            margin-top: 30px;
+            text-align: left;
+            display: none;
+        }
+
+        .history-box h3 {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            margin-top: 0;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .history-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .history-item {
+            background: rgba(0,0,0,0.25);
+            padding: 12px 18px;
+            border-radius: 12px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 1px solid transparent;
+            transition: border-color 0.2s, transform 0.2s;
+        }
+        
+        .history-item:hover {
+            border-color: rgba(255,255,255,0.15);
+            transform: translateX(4px);
+        }
+
+        .history-address {
+            font-family: monospace;
+            color: #e2e8f0;
+            text-decoration: none;
+            font-size: 0.95rem;
+            word-break: break-all;
+            margin-right: 15px;
+        }
+
+        .history-address:hover {
+            color: var(--btc-orange);
+            text-decoration: underline;
+        }
+
+        .history-status {
+            font-weight: 800;
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            border-radius: 20px;
+            letter-spacing: 1px;
+        }
+
+        .status-found { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+        .status-miss { background: rgba(239, 68, 68, 0.15); color: var(--error); }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="glass-card" id="card">
+            <h1>BTC Filter Validator</h1>
+            <p class="subtitle">Drop in a Public Key, Base58 Address, or 20-byte Hash160.<br><br>
+                <span style="color: var(--btc-orange); font-weight: 600; font-size: 0.85rem; letter-spacing: 1px; display: inline-block;">
+                    HASH MAGIC BY <strong>xr</strong> &nbsp;&bull;&nbsp; 0-RAM MAGIC BY <strong>mng</strong>
+                </span>
+            </p>
+            
+            <div class="input-group">
+                <input type="text" id="valInput" placeholder="1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa" autocomplete="off" spellcheck="false">
+            </div>
+
+            <button id="btnCheck" onclick="verifyInput()">
+                <span id="btnText">VERIFY PAYLOAD</span>
+                <div class="spinner" id="spinner"></div>
+            </button>
+
+            <div class="result-box" id="resultBox">
+                <div class="status-title" id="statusTitle">JACKPOT!</div>
+                <p id="statusDesc">This exact address history was found directly on the Bitcoin Blockchain.</p>
+                <div class="meta-data" id="metaData"></div>
+            </div>
+
+            <div class="history-box" id="historyBox">
+                <h3>Recent Checks</h3>
+                <ul class="history-list" id="historyList"></ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ----------------------------------------------------------------
+        // Tiny Offline Base58 Decoder (zero API calls needed!)
+        // ----------------------------------------------------------------
+        function decodeBase58(str) {
+            const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+            let num = BigInt(0);
+            let leadingZeros = 0;
+            
+            // Count leading zeros ('1' characters)
+            while (str[leadingZeros] === '1') leadingZeros++;
+
+            for (let i = 0; i < str.length; i++) {
+                let charIndex = ALPHABET.indexOf(str[i]);
+                if (charIndex === -1) throw new Error("Invalid Base58 Character: " + str[i]);
+                num = num * BigInt(58) + BigInt(charIndex);
+            }
+
+            let hex = num.toString(16);
+            if (hex.length % 2 !== 0) hex = '0' + hex;
+            
+            let hexWithZeros = '00'.repeat(leadingZeros) + hex;
+            
+            // Base58Check = Version (1 byte) + Hash160 (20 bytes) + Checksum (4 bytes)
+            // 1 byte = 2 hex chars. We drop the first 2 chars, then grab the next 40 chars.
+            if (hexWithZeros.length < 42) throw new Error("Base58 Address too short!");
+            return hexWithZeros.substring(2, 42); // Extracts EXACTLY 20-byte (40 char) payload
+        }
+
+        // ----------------------------------------------------------------
+        // Tiny Offline Bech32 (SegWit) Decoder
+        // ----------------------------------------------------------------
+        function decodeBech32(str) {
+            str = str.toLowerCase();
+            if (!str.startsWith('bc1q') || str.length !== 42) {
+                throw new Error("Only standard 42-char Native SegWit P2WPKH (bc1q...) addresses are supported here.");
+            }
+            const ALPHABET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+            let binData = "";
+            // Skip 'bc1q' (indexes 0-3). Mute the checksum. Extract exactly 32 chars of pure payload.
+            for (let i = 4; i < 36; i++) {
+                let charIndex = ALPHABET.indexOf(str[i]);
+                if (charIndex === -1) throw new Error("Invalid Bech32 character: " + str[i]);
+                binData += charIndex.toString(2).padStart(5, '0');
+            }
+            // Convert the 160 bits (32 chars * 5 bits) directly to a flawless 40-character Hex (Hash160)
+            let hex = "";
+            for (let i = 0; i < 40; i++) {
+                let nibble = binData.substring(i * 4, i * 4 + 4);
+                hex += parseInt(nibble, 2).toString(16);
+            }
+            return hex;
+        }
+
+        // ----------------------------------------------------------------
+        // Main Core Processing
+        // ----------------------------------------------------------------
+        async function verifyInput() {
+            const inputField = document.getElementById('valInput');
+            const btn = document.getElementById('btnCheck');
+            const btnText = document.getElementById('btnText');
+            const spinner = document.getElementById('spinner');
+            const resultBox = document.getElementById('resultBox');
+            
+            let rawInput = inputField.value.trim();
+            if (!rawInput) return;
+
+            // Update the URL so the user can instantly copy and share the link
+            const newUrl = new URL(window.location.href);
+            newUrl.searchParams.set('address', rawInput);
+            window.history.replaceState({}, '', newUrl);
+
+            // UI Reset
+            resultBox.classList.remove('show', 'success', 'fail');
+            btn.disabled = true;
+            btnText.style.display = 'none';
+            spinner.style.display = 'inline-block';
+
+            let hash160 = "";
+            let detectionType = "";
+
+            try {
+                // 1. Is it a Native SegWit Address? (bc1q...)
+                if (rawInput.toLowerCase().startsWith('bc1q') && rawInput.length === 42) {
+                    hash160 = decodeBech32(rawInput);
+                    detectionType = "Bech32 (SegWit) Decoded Offline";
+                }
+                // 2. Is it a raw Base58 Address? (Starts with 1 or 3)
+                else if ((rawInput.startsWith('1') || rawInput.startsWith('3')) && rawInput.length >= 26 && rawInput.length <= 35) {
+                    hash160 = decodeBase58(rawInput);
+                    detectionType = "Base58 Decoded Offline";
+                } 
+                // 3. Is it already a Hash160? (exactly 40 hex characters)
+                else if (rawInput.length === 40 && /^[0-9a-fA-F]+$/.test(rawInput)) {
+                    hash160 = rawInput;
+                    detectionType = "Direct Hash160 Input";
+                } 
+                // 3. Is it a raw Public Key? (66 or 130 hex characters)
+                else if ((rawInput.length === 66 || rawInput.length === 130) && /^[0-9a-fA-F]+$/.test(rawInput)) {
+                    // We must do SHA256 -> RIPEMD160 locally using CryptoJS
+                    let pubKeyWords = CryptoJS.enc.Hex.parse(rawInput);
+                    let sha256hash = CryptoJS.SHA256(pubKeyWords);
+                    hash160 = CryptoJS.RIPEMD160(sha256hash).toString(CryptoJS.enc.Hex);
+                    detectionType = "Public Key Hashed via SHA256->RIPEMD160";
+                } 
+                else {
+                    throw new Error("Input format not recognized! Please enter a PubKey, Base58 or Hash160.");
+                }
+
+                // Call the fast O(1) PHP Filter Script
+                // We add a random cache_buster so the browser doesn't falsely cache old results
+                const reqStart = performance.now();
+                const response = await fetch(`index.php?address_hex=${hash160}&_cb=${Date.now()}`);
+                const data = await response.json();
+                const reqEnd = performance.now();
+                const networkTimeMs = (reqEnd - reqStart).toFixed(2);
+
+                if (data.error) throw new Error(data.error);
+
+                showResult(data.found, hash160, detectionType, data.filter_used, data.time_php_ms, networkTimeMs);
+                addToHistory(rawInput, data.found);
+
+            } catch (err) {
+                showResult(false, hash160 || "none", "Error", "None", null, null, err.message);
+            }
+
+            // UI Restore
+            btn.disabled = false;
+            btnText.style.display = 'inline';
+            spinner.style.display = 'none';
+        }
+
+        function showResult(isSuccess, payload, detectType, filterUsed, phpTime, netTime, errorMsg = "") {
+            const box = document.getElementById('resultBox');
+            const title = document.getElementById('statusTitle');
+            const desc = document.getElementById('statusDesc');
+            const meta = document.getElementById('metaData');
+
+            box.className = 'result-box show ' + (isSuccess && !errorMsg ? 'success' : 'fail');
+            
+            if (errorMsg) {
+                title.innerText = "ERROR";
+                desc.innerText = errorMsg;
+                meta.innerHTML = "";
+                return;
+            }
+
+            if (isSuccess) {
+                title.innerText = "JACKPOT! FOUND!";
+                desc.innerText = "O(1) Streaming verified that this Hash once contained a balance.";
+            } else {
+                title.innerText = "NOT FOUND";
+                desc.innerText = "Address was statistically ruled out safely by the Bloom Filter.";
+            }
+
+            let timingHtml = "";
+            if (phpTime !== null && netTime !== null) {
+                timingHtml = `
+                <br>
+                PHP Processing Time: <span class="code" style="color:#38bdf8">${phpTime} ms</span><br>
+                Total Network Time: <span class="code" style="color:#e2e8f0">${netTime} ms</span>
+                `;
+            }
+
+            meta.innerHTML = `
+                Detected Format: <span class="code">${detectType}</span><br>
+                Payload Hash160: <span class="code">${payload}</span><br>
+                Server Disk Target: <span class="code">${filterUsed}</span><br>
+                RAM Consumed: <span class="code" style="color:var(--success)">0.0 MB</span>${timingHtml}
+            `;
+        }
+        
+        // Trigger verification on Enter Key
+        document.getElementById("valInput").addEventListener("keypress", function(event) {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                verifyInput();
+            }
+        });
+
+        // ----------------------------------------------------------------
+        // History / Local Storage Queue
+        // ----------------------------------------------------------------
+        let historyQueue = JSON.parse(localStorage.getItem('btc_history')) || [];
+
+        function renderHistory() {
+            const box = document.getElementById('historyBox');
+            const list = document.getElementById('historyList');
+            if (historyQueue.length === 0) {
+                box.style.display = 'none';
+                return;
+            }
+            box.style.display = 'block';
+            list.innerHTML = '';
+            historyQueue.forEach(item => {
+                const li = document.createElement('li');
+                li.className = 'history-item';
+                
+                const link = document.createElement('a');
+                link.className = 'history-address';
+                link.href = `https://mempool.space/address/${item.input}`;
+                link.target = '_blank';
+                link.innerText = item.input;
+
+                const badge = document.createElement('span');
+                badge.className = 'history-status ' + (item.found ? 'status-found' : 'status-miss');
+                badge.innerText = item.found ? 'FOUND' : 'MISS';
+
+                li.appendChild(link);
+                li.appendChild(badge);
+                list.appendChild(li);
+            });
+        }
+
+        function addToHistory(input, found) {
+            // Push to top, max 10 entries uniquely
+            historyQueue = historyQueue.filter(h => h.input !== input);
+            historyQueue.unshift({ input, found });
+            if (historyQueue.length > 10) historyQueue.pop();
+            localStorage.setItem('btc_history', JSON.stringify(historyQueue));
+            renderHistory();
+        }
+
+        // ----------------------------------------------------------------
+        // Auto-Check URL Parameters (e.g. ?address=... or ?q=...)
+        // ----------------------------------------------------------------
+        window.addEventListener('DOMContentLoaded', () => {
+            renderHistory();
+            const urlParams = new URLSearchParams(window.location.search);
+            const query = urlParams.get('q') || urlParams.get('address') || urlParams.get('hex') || urlParams.get('pubkey');
+            if (query) {
+                document.getElementById('valInput').value = query;
+                verifyInput();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -4,6 +4,8 @@
 
 header('Content-Type: application/json');
 
+$startTime = microtime(true);
+
 // Accept the Hash160 (40-character Hex string) from the URL parameter
 // Example: index.php?address_hex=59b9b40f93d4a8989e02773a153b54a273ad1736
 $hex = $_GET['address_hex'] ?? '';
@@ -90,10 +92,13 @@ $bitPos = 1 << ($h_trunc & $tabM);
 // Check if the bit is true
 $found = ($chunk & $bitPos) !== 0;
 
+$durationMs = round((microtime(true) - $startTime) * 1000, 3);
+
 // Output result JSON
 echo json_encode([
     'address_hex' => $hex,
     'filter_used' => basename($filterFile),
-    'found'       => $found
+    'found'       => $found,
+    'time_php_ms' => $durationMs
 ]);
 ?>
