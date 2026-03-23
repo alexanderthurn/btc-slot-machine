@@ -333,22 +333,23 @@
         }
 
         // ----------------------------------------------------------------
-        // Tiny Offline Bech32 (SegWit) Decoder
+        // Tiny Offline Bech32 / Bech32m (Native SegWit / Taproot) Decoder
         // ----------------------------------------------------------------
         function decodeBech32(str) {
             str = str.toLowerCase();
-            if (!str.startsWith('bc1q') || str.length !== 42) {
-                throw new Error("Only standard 42-char Native SegWit P2WPKH (bc1q...) addresses are supported here.");
+            if (!str.startsWith('bc1') || str.length < 42) {
+                throw new Error("Invalid SegWit/Taproot address (must be bc1... and at least 42 chars).");
             }
             const ALPHABET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
             let binData = "";
-            // Skip 'bc1q' (indexes 0-3). Mute the checksum. Extract exactly 32 chars of pure payload.
+            // Skip the prefix and the version char (e.g. 'q' or 'p'). Extract exactly the first 32 chars of payload.
+            // This safely truncates 62-char long P2WSH/Taproot Bech32m addresses down to the requested 20-bytes.
             for (let i = 4; i < 36; i++) {
                 let charIndex = ALPHABET.indexOf(str[i]);
                 if (charIndex === -1) throw new Error("Invalid Bech32 character: " + str[i]);
                 binData += charIndex.toString(2).padStart(5, '0');
             }
-            // Convert the 160 bits (32 chars * 5 bits) directly to a flawless 40-character Hex (Hash160)
+            // Convert the extracted 160 bits (32 chars * 5 bits) directly to a flawless 40-character Hex
             let hex = "";
             for (let i = 0; i < 40; i++) {
                 let nibble = binData.substring(i * 4, i * 4 + 4);
@@ -385,10 +386,10 @@
             let detectionType = "";
 
             try {
-                // 1. Is it a Native SegWit Address? (bc1q...)
-                if (rawInput.toLowerCase().startsWith('bc1q') && rawInput.length === 42) {
+                // 1. Is it a Native SegWit or Taproot Address? (bc1...)
+                if (rawInput.toLowerCase().startsWith('bc1') && rawInput.length >= 42) {
                     hash160 = decodeBech32(rawInput);
-                    detectionType = "Bech32 (SegWit) Decoded Offline";
+                    detectionType = "Bech32/m (Segwit/Taproot) Decoded to Hash160";
                 }
                 // 2. Is it a raw Base58 Address? (Starts with 1 or 3)
                 else if ((rawInput.startsWith('1') || rawInput.startsWith('3')) && rawInput.length >= 26 && rawInput.length <= 35) {
