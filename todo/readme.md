@@ -4,73 +4,80 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
 
 ## The Unified Command-Line Tool
 
-Everything has been consolidated into a single zero-dependency C++ application: `main.cpp`.
-Compile it once natively with C++17 support and maximum (-O3) hardware optimizations:
+### Core Features
+1. **Frontend (`index.html`)**: 
+   - Supports Legacy, SegWit, and Taproot addresses.
+   - Offline decoding and Hash160 calculation via JavaScript.
+   - Persistent "Recent Checks" history with mempool links.
+   - Performance metrics for both client and server processing.
+
+2. **C++ Preprocessing (`todo/main.cpp`)**:
+   - Parallelized parsing using all available CPU cores via `std::thread`.
+   - Thread-safe Bloom filter updates using `std::atomic<uint64_t>`.
+   - All 7 filter arrays (~4 GB total) kept in RAM for the entire run — loaded once at startup, saved after each chunk as a checkpoint.
+   - Graceful termination (SIGINT/SIGTERM): finishes the current file and saves progress before exiting.
+   - Incremental updates: re-running automatically skips fully completed chunks and only re-parses the last partial chunk (which may have grown since the last run) plus any new chunks.
+   - Extracts 20-byte Hash160 payloads directly from Bitcoin `.dat` files (P2PKH, P2SH, P2WPKH).
+   - Fully dynamic multi-tiered filter generation (32MB up to 2GB).
+   - O(1) direct-to-disk verification for testing addresses without loading massive filters into RAM.
+
+3. **Backend API (`index.php`)**:
+   - Zero-RAM footprint: Queries filter files directly from disk via byte offsets.
+   - Ultra-low latency: Typically < 1ms processing time.
+
+## Installation & Setup
+
+### Prerequisites
+- Docker (recommended) OR
+- C++17 Compiler (g++ or clang++)
+- PHP 7.4+ with GMP extension
+
+### Using Docker
+The easiest way to run the parser is via Docker. The container is fully signal-aware and will gracefully save progress if stopped.
+
 ```bash
-g++ -std=c++17 -O3 main.cpp -o main
-```
+# 1. Build the image
+docker build -t btc-parser todo/
 
-### 1. `download` (Optional)
-Downloads missing example blockchain files (`blk*.dat`) into the `blocks/` directory.
-```bash
-./main download
-```
-
-### 2. `parse [--debug]`
-The core processing engine. Parses the massive `.dat` files sequentially in chunks (1000 files each).
-Instead of saving uncompressed raw payloads to disk, it natively applies a **64-bit FNV-1a Hash** and **simultaneously builds 7 different Bloom Filter Arrays (ranging from 32 MB up to 2048 MB)** in RAM. It then saves them directly to the `filter/` folder.
-* **Crash-proof:** If manually cancelled midway, it seamlessly reparses only incomplete chunks on the next run based on textual `.log` receipts stored inside the `chunks/` folder.
-```bash
-./main parse          # Scans and parses all available untouched blocks automatically
-./main parse --debug  # Prints debug tracking of the first addresses found per file in realtime
-```
-
-### 3. `test <address_or_hash_hex>`
-An ultra-fast O(1) command-line diagnostic tool simulating exactly what the PHP server does. Instead of loading gigabytes of data into RAM, it instantly streams the exact 8 bytes isolated directly off the SSD. It evaluates your test-address uniformly against all 7 file variants to vividly illustrate the mathematical "False-Positive" filter rate threshold.
-```bash
-# Test a Base58 Address
-./main test 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
-
-# Test a 20-byte Hash160 (Hex string)
-./main test 62e907b15cbf27d5425399ebf6f0fb50ebb88f18
-```
-
-## Running on a Bare-Metal Node via Docker
-
-If you want to effortlessly deploy the C++ parser securely onto a pristine node without managing C++ libraries manually, use the provided lightweight Alpine `Dockerfile`.
-
-1. **Build the container image (compiles the code optimized):**
-```bash
-docker build -t btc-parser .
-```
-2. **Execute the parser using folder volume-mounts:**
-```bash
+# 2. Run the parser
+# Mount your bitcoin blocks directory and the output filter directory
 docker run \
   -v /absolute/path/to/host/blocks:/app/blocks \
   -v /absolute/path/to/host/filter:/app/filter \
   -v /absolute/path/to/host/chunks:/app/chunks \
   btc-parser
 ```
-Because the underlying Docker `CMD` is preconfigured to `"parse"`, the container autonomously boots up, processes all unaccounted blockchain `.dat` files, updates your 7 respective filter `.bin` files, writes logging receipts to your `/chunks` folder, and gracefully terminates upon completion.
 
-## Web Server API (index.php)
-To deploy the database for slot-machine processing, simply upload `index.php` alongside the `filter/` directory (e.g. shipping the `2048mb.bin` file, or fallback smaller files like `64mb.bin` or `32mb.bin`) to your PHP host (e.g. ALL-INKL).
+### Aborting & Signals
+The Docker container and C++ process are fully signal-aware. If you need to stop a long-running parse:
+- Press **Ctrl+C** (SIGINT) or send a **SIGTERM**.
+- The parser will finish the current file and gracefully save progress/logs before exiting.
+- We use `tini` in the Dockerfile to ensure signals are correctly propagated to the C++ PID.
 
-The `index.php` executes an absolute O(1) mathematical `fseek` disk-lookup onto the massive binary files utilizing GMP (GNU Multiple Precision). **It verifies thousands of addresses instantly using exactly 0 MB of allocated RAM**.
+## Manual Commands (without Docker)
+If running locally, compile first:
+`g++ -std=c++17 -O3 main.cpp -o main`
 
-**Usage:** `https://your-domain.com/index.php?address_hex=59b9b40f93d4a8989e02773a153b54a273ad1736`
+1. **`./main download`**  
+   Downloads sample `blk*.dat` files to get you started.
 
----
+2. **`./main parse [--debug]`**
+   Scans the `blocks/` directory, auto-detects all chunks, skips already-completed ones, and processes the rest. Safe to run repeatedly — re-running monthly picks up new blocks automatically. The `--debug` flag prints the first address found per type per file.
 
-### Syncing Massive Filters via Rsync
-Because the generated `.bin` files can scale up to 2 GB, standard FTP uploads might silently drop connections or corrupt binary data. Use the following highly-optimized `rsync` command to securely transfer the `filter/` folder from your compilation-node directly to your ALL-INKL web server:
+   To manually run a specific chunk: **`./main parse <chunk_index> [--debug]`**
 
-```bash
-rsync -avP --inplace ./filter/ user@yourserver.com:/path/to/all-inkl/filter/
-```
+3. **`./main test <address_or_hash160>`**  
+   Instantly verifies if an address exists in the generated filters.
 
-**Important Rsync Flags Used:**
-- `-a` : Archive mode (preserves permissions and local file structure).
-- `-P` : Shows a **progress bar** and securely resumes the upload if your internet connection drops midway!
-- `--inplace` : Writes the massive 2 GB file directly to its final destination on the server instead of creating a hidden temporary copy. This reduces SSD wear and prevents shared web servers from suddenly running out of allocated storage quotas during the upload.
-*(Note: We purposely drop the typical `-z` flag because compressing completely randomized binary hash data severely bottlenecks CPU speeds and slows down the transfer significantly).*
+## Incremental Updates
+Re-run `./main parse` (or the Docker container) periodically to pick up new blocks:
+- **Completed chunks** (all 1000 files present and parsed): skipped entirely — old blocks never change.
+- **Last partial chunk**: always re-parsed — Bitcoin Core keeps appending new blocks to the last `.dat` file until it fills up, so a file-count check alone is not sufficient.
+- **New chunks**: processed automatically.
+
+This makes monthly re-runs safe and efficient with no manual bookkeeping.
+
+## Troubleshooting
+- **Missing Blocks**: Ensure your `blocks/` directory contains `blk00000.dat`, `blk00001.dat`, etc.
+- **PHP GMP**: Ensure `extension=gmp` is enabled in your `php.ini`.
+- **Permissions**: Ensure the `filter/` and `chunks/` directories are writable by the process.

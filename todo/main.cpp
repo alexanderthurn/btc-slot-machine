@@ -4,12 +4,25 @@
 #include <string>
 #include <cstdint>
 #include <iomanip>
+#include <atomic>
+#include <thread>
+#include <mutex>
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <csignal>
 
 using namespace std;
+namespace fs = std::filesystem;
+
+std::atomic<bool> keep_running(true);
+
+void signal_handler(int signal) {
+    if (signal == SIGINT || signal == SIGTERM) {
+        keep_running = false;
+    }
+}
 
 // ==============================================================================
 // 1. Core Logic from xr.cpp (FNV Hash and Lookup Table)
@@ -21,6 +34,15 @@ using namespace std;
 #define main xr_standalone_main
 #include "xr.cpp"
 #undef main
+
+// Global Configurations for Multi-Tier Filters
+const int NUM_FILTERS = 7;
+const int filterSizesMB[] = {32, 64, 128, 256, 512, 1024, 2048};
+const int filterBitsExp[] = {28, 29, 30, 31, 32, 33, 34};
+
+typedef std::atomic<uint64_t> ATTab;
+static_assert(ATTab::is_always_lock_free, "std::atomic<uint64_t> must be lock-free for safe bulk binary I/O");
+ATTab* preLookups[NUM_FILTERS];
 
 // ==============================================================================
 // 2. Helper Functions (Decoders, Parsers)
@@ -104,7 +126,7 @@ uint64_t readVarInt(ifstream& file) {
 void cmdDownload() {
     cout << "Starting download of sample block files...\n";
     string targetDir = "blocks";
-    if (!filesystem::exists(targetDir)) filesystem::create_directory(targetDir);
+    if (!fs::exists(targetDir)) fs::create_directory(targetDir);
     
     vector<string> files = {"blk00000.dat", "blk00021.dat", "blk05000.dat"};
     string baseUrl = "http://alexander-thurn.de/temp/blocks/";
@@ -135,32 +157,12 @@ void processChunk(int chunk_index, bool debug) {
     string outLogname = outDir + "/chunk_" + to_string(chunk_index) + ".log";
     
     string filterDir = "filter";
-    if (!filesystem::exists(filterDir)) filesystem::create_directory(filterDir);
-
-    const int NUM_FILTERS = 7;
-    const int filterSizesMB[] = {32, 64, 128, 256, 512, 1024, 2048};
-    const int filterBitsExp[] = {28, 29, 30, 31, 32, 33, 34};
-
-    cout << "Allocating ~4 GB for all 7 Master Filters in RAM...\n";
-    TTab* preLookups[NUM_FILTERS];
-    
-    for (int idx = 0; idx < NUM_FILTERS; ++idx) {
-        uint64_t arraySize = 1ull << (filterBitsExp[idx] - tabS);
-        preLookups[idx] = new TTab[arraySize]();
-        
-        string filename = filterDir + "/" + to_string(filterSizesMB[idx]) + "mb.bin";
-        ifstream filterIn(filename, ios::binary);
-        if (filterIn) {
-            filterIn.read(reinterpret_cast<char*>(preLookups[idx]), arraySize * sizeof(TTab));
-            filterIn.close();
-        }
-    }
 
     vector<string> datFiles;
     vector<int> missingFiles;
     int expectedIndex = start_file;
 
-    for (const auto& entry : filesystem::directory_iterator(blocksDir)) {
+    for (const auto& entry : fs::directory_iterator(blocksDir)) {
         if (entry.path().extension() == ".dat") {
             string filename = entry.path().filename().string();
             if (filename.length() == 12 && filename.substr(0, 3) == "blk") {
@@ -187,7 +189,7 @@ void processChunk(int chunk_index, bool debug) {
     }
 
     for (const string& filepath : datFiles) {
-        string filename = filesystem::path(filepath).filename().string();
+        string filename = fs::path(filepath).filename().string();
         int fileIndex = stoi(filename.substr(3, 5));
         if (fileIndex != expectedIndex) {
             for (int i = expectedIndex; i < fileIndex && missingFiles.size() < 3; i++) {
@@ -211,130 +213,147 @@ void processChunk(int chunk_index, bool debug) {
          << setfill('0') << setw(5) << end_file << ".dat)\n";
 
     uint64_t total_payloads_written = 0;
-    uint64_t count_p2pkh = 0;
-    uint64_t count_p2sh = 0;
-    uint64_t count_p2wpkh = 0;
-
-    for (const string& filepath : datFiles) {
-        ifstream file(filepath, ios::binary);
-        if (!file) continue;
-
-        string filename = filesystem::path(filepath).filename().string();
-        if (!debug) cout << "Parsing file " << filename << "...\n" << flush;
-
-        bool debug_printed_p2pkh = false;
-        bool debug_printed_p2sh = false;
-        bool debug_printed_p2wpkh = false;
-
-        uint32_t magic, blockSize;
-        while (file.read(reinterpret_cast<char*>(&magic), 4)) {
-            if (magic != 0xD9B4BEF9) {
-                file.seekg(-3, ios::cur);
-                continue;
-            }
-            if (!file.read(reinterpret_cast<char*>(&blockSize), 4)) break;
-
-            auto blockStart = file.tellg();
-            
-            file.seekg(80, ios::cur);
-            uint64_t txCount = readVarInt(file);
-            
-            for (uint64_t t = 0; t < txCount; ++t) {
-                uint32_t version;
-                file.read(reinterpret_cast<char*>(&version), 4);
+    uint64_t count_p2pkh = 0, count_p2sh = 0, count_p2wpkh = 0;
+    
+    std::mutex statsMutex;
+    std::atomic<size_t> fileTaskIdx(0);
+    unsigned int numThreads = std::thread::hardware_concurrency();
+    if (numThreads == 0) numThreads = 4;
+    
+    cout << "Parallel processing with " << numThreads << " threads...\n";
+    vector<thread> threads;
+    for (unsigned int t = 0; t < numThreads; ++t) {
+        threads.emplace_back([&]() {
+            while (keep_running) {
+                size_t idx = fileTaskIdx.fetch_add(1);
+                if (idx >= datFiles.size()) break;
                 
-                bool isSegWit = false;
-                uint8_t markerCheck[2];
-                auto currentPos = file.tellg();
-                if (file.read(reinterpret_cast<char*>(markerCheck), 2)) {
-                    if (markerCheck[0] == 0x00 && markerCheck[1] == 0x01) {
-                        isSegWit = true;
-                    } else {
-                        file.seekg(currentPos);
+                const string& filepath = datFiles[idx];
+                ifstream file(filepath, ios::binary);
+                if (!file) continue;
+
+                uint64_t lTotal = 0, lP2PKH = 0, lP2SH = 0, lP2WPKH = 0;
+                string filename = fs::path(filepath).filename().string();
+                static std::mutex coutMtx;
+                if (!debug) {
+                    std::lock_guard<std::mutex> lock(coutMtx);
+                    cout << "Parsing file " << filename << "..." << endl;
+                }
+                bool dbg_p2pkh = false, dbg_p2sh = false, dbg_p2wpkh = false;
+
+                uint32_t magic, blockSize;
+                while (keep_running && file.read(reinterpret_cast<char*>(&magic), 4)) {
+                    if (magic != 0xD9B4BEF9) {
+                        file.seekg(-3, ios::cur);
+                        continue;
                     }
-                }
-                
-                uint64_t inCount = readVarInt(file);
-                for (uint64_t i = 0; i < inCount; ++i) {
-                    file.seekg(36, ios::cur);
-                    uint64_t scriptLen = readVarInt(file);
-                    file.seekg(scriptLen, ios::cur);
-                    file.seekg(4, ios::cur);
-                }
-                
-                uint64_t outCount = readVarInt(file);
-                for (uint64_t i = 0; i < outCount; ++i) {
-                    uint64_t value;
-                    file.read(reinterpret_cast<char*>(&value), 8);
+                    if (!file.read(reinterpret_cast<char*>(&blockSize), 4)) break;
+                    auto blockStart = file.tellg();
+                    file.seekg(80, ios::cur);
+                    uint64_t txCount = readVarInt(file);
                     
-                    uint64_t scriptLen = readVarInt(file);
-                    vector<uint8_t> script(scriptLen);
-                    file.read(reinterpret_cast<char*>(script.data()), scriptLen);
+                    for (uint64_t t_tx = 0; t_tx < txCount && keep_running; ++t_tx) {
+                        uint32_t version;
+                        file.read(reinterpret_cast<char*>(&version), 4);
+                        bool isSW = false;
+                        uint8_t mCheck[2];
+                        auto cPos = file.tellg();
+                        if (file.read(reinterpret_cast<char*>(mCheck), 2)) {
+                            if (mCheck[0] == 0x00 && mCheck[1] == 0x01) isSW = true;
+                            else file.seekg(cPos);
+                        }
+                        
+                        uint64_t inC = readVarInt(file);
+                        for (uint64_t i = 0; i < inC; ++i) {
+                            file.seekg(36, ios::cur);
+                            uint64_t sLen = readVarInt(file);
+                            file.seekg(sLen, ios::cur);
+                            file.seekg(4, ios::cur);
+                        }
+                        
+                        uint64_t outC = readVarInt(file);
+                        for (uint64_t i = 0; i < outC; ++i) {
+                            uint64_t val;
+                            file.read(reinterpret_cast<char*>(&val), 8);
+                            uint64_t sLen = readVarInt(file);
+                            vector<uint8_t> script(sLen);
+                            file.read(reinterpret_cast<char*>(script.data()), sLen);
 
-                    if (value == 0) continue;
+                            if (val == 0) continue;
 
-                    if (scriptLen == 25 && script[0] == 0x76 && script[1] == 0xa9 && script[2] == 0x14 && script[23] == 0x88 && script[24] == 0xac) {
-                        TKey keyBuffer;
-                        memcpy(keyBuffer, script.data() + 3, 20);
-                        uint64_t fullHash = SNVByte<0x00000100000001B3ull>(keyBuffer, 0xCBF29CE484222325ull);
-                        for (int idx = 0; idx < NUM_FILTERS; ++idx) {
-                            uint64_t h_trunc = fullHash & ((1ull << filterBitsExp[idx]) - 1);
-                            preLookups[idx][h_trunc >> tabS] |= ((TTab)1 << (h_trunc & tabM));
+                            if (sLen == 25 && script[0] == 0x76 && script[1] == 0xa9 && script[2] == 0x14 && script[23] == 0x88 && script[24] == 0xac) {
+                                TKey kBuf; memcpy(kBuf, script.data() + 3, 20);
+                                uint64_t fH = SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
+                                for (int f = 0; f < NUM_FILTERS; ++f) {
+                                    uint64_t h = fH & ((1ull << filterBitsExp[f]) - 1);
+                                    preLookups[f][h >> tabS].fetch_or(((TTab)1 << (h & tabM)), std::memory_order_relaxed);
+                                }
+                                lP2PKH++; lTotal++;
+                                if (debug && !dbg_p2pkh) {
+                                    std::lock_guard<std::mutex> lock(coutMtx);
+                                    cout << "[DEBUG] " << filename << " | P2PKH:  " << toHex(vector<uint8_t>(kBuf, kBuf + 20)) << "\n";
+                                    dbg_p2pkh = true;
+                                }
+                            } else if (sLen == 23 && script[0] == 0xa9 && script[1] == 0x14 && script[22] == 0x87) {
+                                TKey kBuf; memcpy(kBuf, script.data() + 2, 20);
+                                uint64_t fH = SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
+                                for (int f = 0; f < NUM_FILTERS; ++f) {
+                                    uint64_t h = fH & ((1ull << filterBitsExp[f]) - 1);
+                                    preLookups[f][h >> tabS].fetch_or(((TTab)1 << (h & tabM)), std::memory_order_relaxed);
+                                }
+                                lP2SH++; lTotal++;
+                                if (debug && !dbg_p2sh) {
+                                    std::lock_guard<std::mutex> lock(coutMtx);
+                                    cout << "[DEBUG] " << filename << " | P2SH:   " << toHex(vector<uint8_t>(kBuf, kBuf + 20)) << "\n";
+                                    dbg_p2sh = true;
+                                }
+                            } else if (sLen == 22 && script[0] == 0x00 && script[1] == 0x14) {
+                                TKey kBuf; memcpy(kBuf, script.data() + 2, 20);
+                                uint64_t fH = SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
+                                for (int f = 0; f < NUM_FILTERS; ++f) {
+                                    uint64_t h = fH & ((1ull << filterBitsExp[f]) - 1);
+                                    preLookups[f][h >> tabS].fetch_or(((TTab)1 << (h & tabM)), std::memory_order_relaxed);
+                                }
+                                lP2WPKH++; lTotal++;
+                                if (debug && !dbg_p2wpkh) {
+                                    std::lock_guard<std::mutex> lock(coutMtx);
+                                    cout << "[DEBUG] " << filename << " | P2WPKH: " << toHex(vector<uint8_t>(kBuf, kBuf + 20)) << "\n";
+                                    dbg_p2wpkh = true;
+                                }
+                            }
                         }
-                        if(debug && !debug_printed_p2pkh) {
-                            cout << "[DEBUG] " << filename << " | Found P2PKH Hash160: " << toHex(vector<uint8_t>(script.begin()+3, script.begin()+23)) << "\n";
-                            debug_printed_p2pkh = true;
+                        
+                        if (isSW) {
+                            uint64_t wC = inC;
+                            for (uint64_t i = 0; i < wC; ++i) {
+                                uint64_t wItems = readVarInt(file);
+                                for (uint64_t w = 0; w < wItems; ++w) {
+                                    uint64_t iLen = readVarInt(file);
+                                    file.seekg(iLen, ios::cur);
+                                }
+                            }
                         }
-                        count_p2pkh++;
-                        total_payloads_written++;
-                    } else if (scriptLen == 23 && script[0] == 0xa9 && script[1] == 0x14 && script[22] == 0x87) {
-                        TKey keyBuffer;
-                        memcpy(keyBuffer, script.data() + 2, 20);
-                        uint64_t fullHash = SNVByte<0x00000100000001B3ull>(keyBuffer, 0xCBF29CE484222325ull);
-                        for (int idx = 0; idx < NUM_FILTERS; ++idx) {
-                            uint64_t h_trunc = fullHash & ((1ull << filterBitsExp[idx]) - 1);
-                            preLookups[idx][h_trunc >> tabS] |= ((TTab)1 << (h_trunc & tabM));
-                        }
-                        if(debug && !debug_printed_p2sh) {
-                            cout << "[DEBUG] " << filename << " | Found P2SH Hash160: " << toHex(vector<uint8_t>(script.begin()+2, script.begin()+22)) << "\n";
-                            debug_printed_p2sh = true;
-                        }
-                        count_p2sh++;
-                        total_payloads_written++;
-                    } else if (scriptLen == 22 && script[0] == 0x00 && script[1] == 0x14) {
-                        TKey keyBuffer;
-                        memcpy(keyBuffer, script.data() + 2, 20);
-                        uint64_t fullHash = SNVByte<0x00000100000001B3ull>(keyBuffer, 0xCBF29CE484222325ull);
-                        for (int idx = 0; idx < NUM_FILTERS; ++idx) {
-                            uint64_t h_trunc = fullHash & ((1ull << filterBitsExp[idx]) - 1);
-                            preLookups[idx][h_trunc >> tabS] |= ((TTab)1 << (h_trunc & tabM));
-                        }
-                        if(debug && !debug_printed_p2wpkh) {
-                            cout << "[DEBUG] " << filename << " | Found P2WPKH Hash160: " << toHex(vector<uint8_t>(script.begin()+2, script.begin()+22)) << "\n";
-                            debug_printed_p2wpkh = true;
-                        }
-                        count_p2wpkh++;
-                        total_payloads_written++;
+                        file.seekg(4, ios::cur);
                     }
+                    file.seekg(blockStart + static_cast<streamoff>(blockSize));
                 }
                 
-                if (isSegWit) {
-                    for (uint64_t i = 0; i < inCount; ++i) {
-                        uint64_t witnessItems = readVarInt(file);
-                        for (uint64_t w = 0; w < witnessItems; ++w) {
-                            uint64_t itemLen = readVarInt(file);
-                            file.seekg(itemLen, ios::cur);
-                        }
-                    }
+                {
+                    std::lock_guard<std::mutex> lock(statsMutex);
+                    total_payloads_written += lTotal;
+                    count_p2pkh += lP2PKH; count_p2sh += lP2SH; count_p2wpkh += lP2WPKH;
                 }
-                
-                file.seekg(4, ios::cur);
             }
-            file.seekg(blockStart + static_cast<streamoff>(blockSize));
-        }
+        });
     }
 
-    cout << "\n\nDone parsing chunk " << chunk_index << "!\n";
+    for (auto& t : threads) t.join();
+
+    if (!keep_running) {
+        cout << "[WARNING] Aborting chunk " << chunk_index << " due to exit signal...\n";
+    }
+
+    cout << "\nDone parsing chunk " << chunk_index << "!\n";
     cout << "Saving all 7 filters to disk (total ~4 GB)...\n";
     
     for (int idx = 0; idx < NUM_FILTERS; ++idx) {
@@ -343,7 +362,6 @@ void processChunk(int chunk_index, bool debug) {
         ofstream filterOut(filename, ios::binary);
         filterOut.write(reinterpret_cast<const char*>(preLookups[idx]), arraySize * sizeof(TTab));
         filterOut.close();
-        delete[] preLookups[idx];
     }
 
     cout << "Writing parsing log to " << outLogname << "...\n";
@@ -369,20 +387,37 @@ void processChunk(int chunk_index, bool debug) {
 
 void cmdParse(int arg_chunk_index, bool debug) {
     string blocksDir = "blocks";
-    if (!filesystem::exists(blocksDir)) {
+    if (!fs::exists(blocksDir)) {
         cerr << "Directory 'blocks' not found!\n";
         return;
     }
 
     string outDir = "chunks";
-    if (!filesystem::exists(outDir)) filesystem::create_directory(outDir);
+    if (!fs::exists(outDir)) fs::create_directory(outDir);
+
+    string filterDir = "filter";
+    if (!fs::exists(filterDir)) fs::create_directory(filterDir);
+
+    cout << "Allocating ~4 GB for all 7 Master Filters in RAM (Thread-safe Atomics)...\n";
+    for (int idx = 0; idx < NUM_FILTERS; ++idx) {
+        uint64_t arraySize = 1ull << (filterBitsExp[idx] - tabS);
+        preLookups[idx] = new ATTab[arraySize];
+        for (uint64_t j = 0; j < arraySize; ++j) preLookups[idx][j].store(0, std::memory_order_relaxed);
+        string filename = filterDir + "/" + to_string(filterSizesMB[idx]) + "mb.bin";
+        ifstream filterIn(filename, ios::binary);
+        if (filterIn) {
+            // Bulk read is safe: atomic<uint64_t> is guaranteed lock-free (static_assert above)
+            filterIn.read(reinterpret_cast<char*>(preLookups[idx]), arraySize * sizeof(TTab));
+            cout << "  Resumed: loaded existing " << filterSizesMB[idx] << "mb.bin\n";
+        }
+    }
 
     if (arg_chunk_index != -1) {
         processChunk(arg_chunk_index, debug);
     } else {
         cout << "Scanning 'blocks' directory to evaluate needed chunks...\n";
         int maxFileIndex = -1;
-        for (const auto& entry : filesystem::directory_iterator(blocksDir)) {
+        for (const auto& entry : fs::directory_iterator(blocksDir)) {
             if (entry.path().extension() == ".dat") {
                 string filename = entry.path().filename().string();
                 if (filename.length() == 12 && filename.substr(0, 3) == "blk") {
@@ -396,6 +431,7 @@ void cmdParse(int arg_chunk_index, bool debug) {
         
         if (maxFileIndex == -1) {
             cout << "[WARNING] No .dat files found in the 'blocks' directory.\n";
+            for (int idx = 0; idx < NUM_FILTERS; ++idx) delete[] preLookups[idx];
             return;
         }
 
@@ -407,7 +443,7 @@ void cmdParse(int arg_chunk_index, bool debug) {
             string outFilename = outDir + "/chunk_" + to_string(i) + ".log";
             bool skipChunk = false;
             
-            if (filesystem::exists(outFilename)) {
+            if (fs::exists(outFilename)) {
                 ifstream logIn(outFilename);
                 string firstLine;
                 if (getline(logIn, firstLine) && firstLine.find("Completed") != string::npos) {
@@ -420,7 +456,11 @@ void cmdParse(int arg_chunk_index, bool debug) {
                 cout << "[SKIP] Chunk " << i << " is completely parsed. Skipping...\n";
                 skipped++;
             } else {
-                if (filesystem::exists(outFilename)) {
+                if (!keep_running) {
+                    cout << "\n[INFO] Gracefully aborting before chunk " << i << "...\n";
+                    break;
+                }
+                if (fs::exists(outFilename)) {
                     cout << "[REPARSE] Chunk " << i << " was incomplete. Reparsing...\n";
                 }
                 processChunk(i, debug);
@@ -429,6 +469,8 @@ void cmdParse(int arg_chunk_index, bool debug) {
         }
         cout << "\nAll routines finished. Processed: " << processed << " Chunks, Skipped: " << skipped << " Chunks.\n";
     }
+
+    for (int idx = 0; idx < NUM_FILTERS; ++idx) delete[] preLookups[idx];
 }
 
 // ==============================================================================
@@ -479,14 +521,13 @@ void cmdTest(const string& input) {
     for (int i = 0; i < 20; ++i) keyBuffer[i] = payload[i];
     uint64_t fullHash = SNVByte<0x00000100000001B3ull>(keyBuffer, 0xCBF29CE484222325ull);
 
-    const int NUM_FILTERS = 7;
-    const int filterSizesMB[] = {32, 64, 128, 256, 512, 1024, 2048};
-    const int filterBitsExp[] = {28, 29, 30, 31, 32, 33, 34};
+    const int targetNUM = NUM_FILTERS;
+    const int* targetSizes = filterSizesMB;
     
     cout << "\n----------------------------------------\n";
     
-    for (int idx = 0; idx < NUM_FILTERS; ++idx) {
-        string filterFilename = "filter/" + to_string(filterSizesMB[idx]) + "mb.bin";
+    for (int idx = 0; idx < targetNUM; ++idx) {
+        string filterFilename = "filter/" + to_string(targetSizes[idx]) + "mb.bin";
         ifstream file(filterFilename, ios::binary);
         if (!file) continue;
 
@@ -525,6 +566,9 @@ void printHelp() {
 }
 
 int main(int argc, char* argv[]) {
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+
     if (argc < 2) {
         printHelp();
         return 1;
