@@ -136,15 +136,24 @@ void processChunk(int chunk_index, bool debug) {
     
     string filterDir = "filter";
     if (!filesystem::exists(filterDir)) filesystem::create_directory(filterDir);
-    string filterFilename = filterDir + "/final.bin";
 
-    uint64_t arraySize = 1ull << (hashTabBitsExp > tabS ? hashTabBitsExp - tabS : 0);
-    TTab* preLookup = new TTab[arraySize]();
+    const int NUM_FILTERS = 7;
+    const int filterSizesMB[] = {32, 64, 128, 256, 512, 1024, 2048};
+    const int filterBitsExp[] = {28, 29, 30, 31, 32, 33, 34};
+
+    cout << "Allocating ~4 GB for all 7 Master Filters in RAM...\n";
+    TTab* preLookups[NUM_FILTERS];
     
-    ifstream filterIn(filterFilename, ios::binary);
-    if (filterIn) {
-        filterIn.read(reinterpret_cast<char*>(preLookup), arraySize * sizeof(TTab));
-        filterIn.close();
+    for (int idx = 0; idx < NUM_FILTERS; ++idx) {
+        uint64_t arraySize = 1ull << (filterBitsExp[idx] - tabS);
+        preLookups[idx] = new TTab[arraySize]();
+        
+        string filename = filterDir + "/" + to_string(filterSizesMB[idx]) + "mb.bin";
+        ifstream filterIn(filename, ios::binary);
+        if (filterIn) {
+            filterIn.read(reinterpret_cast<char*>(preLookups[idx]), arraySize * sizeof(TTab));
+            filterIn.close();
+        }
     }
 
     vector<string> datFiles;
@@ -171,7 +180,9 @@ void processChunk(int chunk_index, bool debug) {
              << " (Expected files blk" << setfill('0') << setw(5) << start_file 
              << ".dat to blk" << setfill('0') << setw(5) << end_file << ".dat)\n";
         
-        delete[] preLookup;
+        for (int idx = 0; idx < NUM_FILTERS; ++idx) {
+            delete[] preLookups[idx];
+        }
         return;
     }
 
@@ -265,7 +276,11 @@ void processChunk(int chunk_index, bool debug) {
                     if (scriptLen == 25 && script[0] == 0x76 && script[1] == 0xa9 && script[2] == 0x14 && script[23] == 0x88 && script[24] == 0xac) {
                         TKey keyBuffer;
                         memcpy(keyBuffer, script.data() + 3, 20);
-                        setKey(preLookup, keyBuffer);
+                        uint64_t fullHash = SNVByte<0x00000100000001B3ull>(keyBuffer, 0xCBF29CE484222325ull);
+                        for (int idx = 0; idx < NUM_FILTERS; ++idx) {
+                            uint64_t h_trunc = fullHash & ((1ull << filterBitsExp[idx]) - 1);
+                            preLookups[idx][h_trunc >> tabS] |= ((TTab)1 << (h_trunc & tabM));
+                        }
                         if(debug && !debug_printed_p2pkh) {
                             cout << "[DEBUG] " << filename << " | Found P2PKH Hash160: " << toHex(vector<uint8_t>(script.begin()+3, script.begin()+23)) << "\n";
                             debug_printed_p2pkh = true;
@@ -275,7 +290,11 @@ void processChunk(int chunk_index, bool debug) {
                     } else if (scriptLen == 23 && script[0] == 0xa9 && script[1] == 0x14 && script[22] == 0x87) {
                         TKey keyBuffer;
                         memcpy(keyBuffer, script.data() + 2, 20);
-                        setKey(preLookup, keyBuffer);
+                        uint64_t fullHash = SNVByte<0x00000100000001B3ull>(keyBuffer, 0xCBF29CE484222325ull);
+                        for (int idx = 0; idx < NUM_FILTERS; ++idx) {
+                            uint64_t h_trunc = fullHash & ((1ull << filterBitsExp[idx]) - 1);
+                            preLookups[idx][h_trunc >> tabS] |= ((TTab)1 << (h_trunc & tabM));
+                        }
                         if(debug && !debug_printed_p2sh) {
                             cout << "[DEBUG] " << filename << " | Found P2SH Hash160: " << toHex(vector<uint8_t>(script.begin()+2, script.begin()+22)) << "\n";
                             debug_printed_p2sh = true;
@@ -285,7 +304,11 @@ void processChunk(int chunk_index, bool debug) {
                     } else if (scriptLen == 22 && script[0] == 0x00 && script[1] == 0x14) {
                         TKey keyBuffer;
                         memcpy(keyBuffer, script.data() + 2, 20);
-                        setKey(preLookup, keyBuffer);
+                        uint64_t fullHash = SNVByte<0x00000100000001B3ull>(keyBuffer, 0xCBF29CE484222325ull);
+                        for (int idx = 0; idx < NUM_FILTERS; ++idx) {
+                            uint64_t h_trunc = fullHash & ((1ull << filterBitsExp[idx]) - 1);
+                            preLookups[idx][h_trunc >> tabS] |= ((TTab)1 << (h_trunc & tabM));
+                        }
                         if(debug && !debug_printed_p2wpkh) {
                             cout << "[DEBUG] " << filename << " | Found P2WPKH Hash160: " << toHex(vector<uint8_t>(script.begin()+2, script.begin()+22)) << "\n";
                             debug_printed_p2wpkh = true;
@@ -312,12 +335,16 @@ void processChunk(int chunk_index, bool debug) {
     }
 
     cout << "\n\nDone parsing chunk " << chunk_index << "!\n";
-    cout << "Saving updated 512 MB filter to " << filterFilename << "...\n";
+    cout << "Saving all 7 filters to disk (total ~4 GB)...\n";
     
-    ofstream filterOut(filterFilename, ios::binary);
-    filterOut.write(reinterpret_cast<const char*>(preLookup), arraySize * sizeof(TTab));
-    filterOut.close();
-    delete[] preLookup;
+    for (int idx = 0; idx < NUM_FILTERS; ++idx) {
+        string filename = filterDir + "/" + to_string(filterSizesMB[idx]) + "mb.bin";
+        uint64_t arraySize = 1ull << (filterBitsExp[idx] - tabS);
+        ofstream filterOut(filename, ios::binary);
+        filterOut.write(reinterpret_cast<const char*>(preLookups[idx]), arraySize * sizeof(TTab));
+        filterOut.close();
+        delete[] preLookups[idx];
+    }
 
     cout << "Writing parsing log to " << outLogname << "...\n";
     ofstream logOut(outLogname);
@@ -409,30 +436,15 @@ void cmdParse(int arg_chunk_index, bool debug) {
 // ==============================================================================
 void cmdBuild() {
     cout << "[INFO] The 'build' step is no longer necessary!\n";
-    cout << "       The 'parse' command now directly injects all data into 'filter/final.bin'.\n";
-    cout << "       Your 512 MB file is already finished and ready for the web game.\n";
+    cout << "       The 'parse' command now natively injects into the completely dynamic,\n";
+    cout << "       multi-tiered 2^n (32MB, 64MB ... 2048MB) filter array system.\n";
+    cout << "       Look inside your 'filter/' folder!\n";
 }
 
 // ==============================================================================
-// 6. Command: Test (Uses the final.bin)
+// 6. Command: Test (Uses the multi-tier filters via O(1) Direct Streaming)
 // ==============================================================================
 void cmdTest(const string& input) {
-    string filterFilename = "filter/final.bin";
-    ifstream file(filterFilename, ios::binary);
-    if (!file) {
-        cerr << "[ERROR] Could not load " << filterFilename << ". Run 'build' first!\n";
-        return;
-    }
-
-    cout << "Loading 512MB filter into RAM...\n";
-    uint64_t arraySize = 1ull << (hashTabBitsExp > tabS ? hashTabBitsExp - tabS : 0);
-    TTab* preLookup = new TTab[arraySize]();
-    if (!file.read(reinterpret_cast<char*>(preLookup), arraySize * sizeof(TTab))) {
-        cerr << "[ERROR] Corrupted or incomplete filter table.\n";
-        delete[] preLookup;
-        return;
-    }
-
     vector<uint8_t> payload;
 
     // Is it a 40-char Hex String? (Hash160)
@@ -445,7 +457,6 @@ void cmdTest(const string& input) {
         vector<uint8_t> decoded = decodeBase58(input);
         if (decoded.size() < 25) {
             cerr << "[ERROR] Invalid Base58 address length.\n";
-            delete[] preLookup;
             return;
         }
         // Base58Check has 1 byte version + 20 bytes hash + 4 bytes checksum
@@ -457,30 +468,41 @@ void cmdTest(const string& input) {
         cerr << "[INFO] This script expects 20-byte Hash160s (Addresses).\n";
         cerr << "Your input appears to be a raw Public Key. You must compute SHA256 -> RIPEMD160 \n";
         cerr << "on this Public Key first to get the 20-byte address payload before testing it.\n";
-        delete[] preLookup;
         return;
     }
     else {
         cerr << "[ERROR] Unrecognized format. Please pass a Base58 Address (1...) or a 40-char Hex (Hash160).\n";
-        delete[] preLookup;
         return;
     }
 
-    // Checking the filter
     TKey keyBuffer;
     for (int i = 0; i < 20; ++i) keyBuffer[i] = payload[i];
+    uint64_t fullHash = SNVByte<0x00000100000001B3ull>(keyBuffer, 0xCBF29CE484222325ull);
 
-    bool found = testKey(preLookup, keyBuffer);
+    const int NUM_FILTERS = 7;
+    const int filterSizesMB[] = {32, 64, 128, 256, 512, 1024, 2048};
+    const int filterBitsExp[] = {28, 29, 30, 31, 32, 33, 34};
+    
     cout << "\n----------------------------------------\n";
-    if (found) {
-        cout << "[SUCCESS] YES! This address/hash was found in the filter!\n";
-        cout << "          (It once had a balance on the Bitcoin Blockchain)\n";
-    } else {
-        cout << "[FAILURE] NO. This address/hash is definitively NOT in the filter.\n";
+    
+    for (int idx = 0; idx < NUM_FILTERS; ++idx) {
+        string filterFilename = "filter/" + to_string(filterSizesMB[idx]) + "mb.bin";
+        ifstream file(filterFilename, ios::binary);
+        if (!file) continue;
+
+        uint64_t targetBitsExp = filterBitsExp[idx];
+        uint64_t h_trunc = fullHash & ((1ull << targetBitsExp) - 1);
+        uint64_t byteOffset = (h_trunc >> tabS) * sizeof(TTab);
+        
+        file.seekg(byteOffset);
+        TTab chunk;
+        if (file.read(reinterpret_cast<char*>(&chunk), sizeof(TTab))) {
+            bool found = (chunk & ((TTab)1 << (h_trunc & tabM))) != 0;
+            cout << setw(4) << filterSizesMB[idx] << " MB : " << (found ? "YES" : "NO") << "\n";
+        }
+        file.close();
     }
     cout << "----------------------------------------\n";
-
-    delete[] preLookup;
 }
 
 // ==============================================================================

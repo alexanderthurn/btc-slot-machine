@@ -8,7 +8,7 @@ using std::endl;
 
 static constexpr uint64_t keyBytes = 20;
 static constexpr uint64_t hashTabBitsExp = 32;
-using THash = uint32_t; // may be > hashTabBitsExp
+using THash = uint64_t; // upgraded to 64-bit to support >512MB
 
 using TKey = uint8_t[keyBytes];
 using TTab = uint64_t;

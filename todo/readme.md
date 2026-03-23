@@ -1,38 +1,32 @@
-# Bitcoin Slot Machine - Preprocessing Pipeline
+# Bitcoin Slot Machine - High-Performance Filter Pipeline
 
-This toolset processes raw Bitcoin data (`blk*.dat`), extracts address payloads, and compresses them into a highly space-efficient Bloom filter / Hash table format (`final_filter_table.bin`) for the Slot Machine web game.
+This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), extracts 20-byte Hash160 address payloads, and intelligently builds a **multi-tiered 64-bit Bloom Filter Hierarchy (32 MB to 2048 MB)** for instantaneous, 0-RAM lookups on any conventional Web Server.
 
 ## The Unified Command-Line Tool
 
 Everything has been consolidated into a single zero-dependency C++ application: `main.cpp`.
-Compile it once with C++17 support:
+Compile it once natively with C++17 support and maximum (-O3) hardware optimizations:
 ```bash
-g++ -std=c++17 main.cpp -o main
+g++ -std=c++17 -O3 main.cpp -o main
 ```
 
-### Usage Instructions
-
-**1. `download`** (Optional)
+### 1. `download` (Optional)
 Downloads missing example blockchain files (`blk*.dat`) into the `blocks/` directory.
 ```bash
 ./main download
 ```
 
-**2. `parse <chunk_index> [--debug]`**
-Scans the raw `.dat` data for Transaction Outputs (TxOut) and saves exactly the 20-byte "Hash160-payloads" of valid Bitcoin addresses. Because the blockchain is huge, execution is split into "chunks" of 1000 blocks each to prevent data loss on crash.
+### 2. `parse [--debug]`
+The core processing engine. Parses the massive `.dat` files sequentially in chunks (1000 files each).
+Instead of saving uncompressed raw payloads to disk, it natively applies a **64-bit FNV-1a Hash** and **simultaneously builds 7 different Bloom Filter Arrays (ranging from 32 MB up to 2048 MB)** in RAM. It then saves them directly to the `filter/` folder.
+* **Crash-proof:** If manually cancelled midway, it seamlessly reparses only incomplete chunks on the next run based on textual `.log` receipts stored inside the `chunks/` folder.
 ```bash
-./main parse 0          # Parses blocks 0 to 999
-./main parse 1 --debug  # Parses blocks 1000 to 1999 and prints found addresses realtime
+./main parse          # Scans and parses all available untouched blocks automatically
+./main parse --debug  # Prints debug tracking of the first addresses found per file in realtime
 ```
 
-**3. `build`**
-Collects all extracted payloads from the `chunks/` directory and processes them through the fast, low-memory **FNV-hash function**. It ultimately creates the exact 512 MB array (`final_filter_table.bin`) the web game needs.
-```bash
-./main build
-```
-
-**4. `test <address_or_hash_hex>`**
-Loads the processed `final_filter_table.bin` directly into the computer's RAM and checks whether an address or Hash160 was ever funded on the Bitcoin network in a fraction of a second.
+### 3. `test <address_or_hash_hex>`
+An ultra-fast O(1) command-line diagnostic tool simulating exactly what the PHP server does. Instead of loading gigabytes of data into RAM, it instantly streams the exact 8 bytes isolated directly off the SSD. It evaluates your test-address uniformly against all 7 file variants to vividly illustrate the mathematical "False-Positive" filter rate threshold.
 ```bash
 # Test a Base58 Address
 ./main test 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
@@ -41,5 +35,27 @@ Loads the processed `final_filter_table.bin` directly into the computer's RAM an
 ./main test 62e907b15cbf27d5425399ebf6f0fb50ebb88f18
 ```
 
-## Integration (Web Game)
-The web game no longer needs to process thousands of files. It reserves memory, directly loads the `final_filter_table.bin` as a highly compressed lookup table, and executes `testKey()` to rapidly evaluate if any randomly generated public key/address was ever active on the blockchain.
+## Running on a Bare-Metal Node via Docker
+
+If you want to effortlessly deploy the C++ parser securely onto a pristine node without managing C++ libraries manually, use the provided lightweight Alpine `Dockerfile`.
+
+1. **Build the container image (compiles the code optimized):**
+```bash
+docker build -t btc-parser .
+```
+2. **Execute the parser using folder volume-mounts:**
+```bash
+docker run \
+  -v /absolute/path/to/host/blocks:/app/blocks \
+  -v /absolute/path/to/host/filter:/app/filter \
+  -v /absolute/path/to/host/chunks:/app/chunks \
+  btc-parser
+```
+Because the underlying Docker `CMD` is preconfigured to `"parse"`, the container autonomously boots up, processes all unaccounted blockchain `.dat` files, updates your 7 respective filter `.bin` files, writes logging receipts to your `/chunks` folder, and gracefully terminates upon completion.
+
+## Web Server API (index.php)
+To deploy the database for slot-machine processing, simply upload `index.php` alongside the `filter/` directory (e.g. shipping the `2048mb.bin` file, or fallback smaller files like `64mb.bin` or `32mb.bin`) to your PHP host (e.g. ALL-INKL).
+
+The `index.php` executes an absolute O(1) mathematical `fseek` disk-lookup onto the massive binary files utilizing GMP (GNU Multiple Precision). **It verifies thousands of addresses instantly using exactly 0 MB of allocated RAM**.
+
+**Usage:** `https://your-domain.com/index.php?address_hex=59b9b40f93d4a8989e02773a153b54a273ad1736`
