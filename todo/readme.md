@@ -59,3 +59,18 @@ To deploy the database for slot-machine processing, simply upload `index.php` al
 The `index.php` executes an absolute O(1) mathematical `fseek` disk-lookup onto the massive binary files utilizing GMP (GNU Multiple Precision). **It verifies thousands of addresses instantly using exactly 0 MB of allocated RAM**.
 
 **Usage:** `https://your-domain.com/index.php?address_hex=59b9b40f93d4a8989e02773a153b54a273ad1736`
+
+---
+
+### Syncing Massive Filters via Rsync
+Because the generated `.bin` files can scale up to 2 GB, standard FTP uploads might silently drop connections or corrupt binary data. Use the following highly-optimized `rsync` command to securely transfer the `filter/` folder from your compilation-node directly to your ALL-INKL web server:
+
+```bash
+rsync -avP --inplace ./filter/ user@yourserver.com:/path/to/all-inkl/filter/
+```
+
+**Important Rsync Flags Used:**
+- `-a` : Archive mode (preserves permissions and local file structure).
+- `-P` : Shows a **progress bar** and securely resumes the upload if your internet connection drops midway!
+- `--inplace` : Writes the massive 2 GB file directly to its final destination on the server instead of creating a hidden temporary copy. This reduces SSD wear and prevents shared web servers from suddenly running out of allocated storage quotas during the upload.
+*(Note: We purposely drop the typical `-z` flag because compressing completely randomized binary hash data severely bottlenecks CPU speeds and slows down the transfer significantly).*
