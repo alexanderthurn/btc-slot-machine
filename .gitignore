@@ -26,3 +26,6 @@ dist-ssr
 public/assets
 .assetpack
 src/manifest.json
+*.dat
+todo/xr
+todo/download_blocks
