@@ -182,9 +182,6 @@ void processChunk(int chunk_index, bool debug) {
              << " (Expected files blk" << setfill('0') << setw(5) << start_file 
              << ".dat to blk" << setfill('0') << setw(5) << end_file << ".dat)\n";
         
-        for (int idx = 0; idx < NUM_FILTERS; ++idx) {
-            delete[] preLookups[idx];
-        }
         return;
     }
 
