@@ -72,6 +72,21 @@ If running locally, compile from the `parser/` directory first:
 3. **`./main test <address_or_hash160>`**  
    Instantly verifies if an address exists in the generated filters.
 
+## Syncing Blocks from an External Source
+
+If your Bitcoin block files live on a separate machine or mount, you can sync them using a wrapper script that sets the source/destination before calling the helper in `parser/misc/`:
+
+```bash
+#!/bin/bash
+
+export BLOCKCHAIN_SOURCE="/mnt/your-bitcoin-node/blocks/"
+export BLOCKCHAIN_DEST="./blocks/"
+
+(cd btc-slot-machine/parser && bash sync-blockchain-from-bitcoind.sh)
+```
+
+The subshell `( )` keeps your working directory unchanged after the call. Override `BLOCKCHAIN_SOURCE` and `BLOCKCHAIN_DEST` to match your own paths.
+
 ## Incremental Updates
 Re-run `./main parse` (or the Docker container) periodically to pick up new blocks:
 - **Completed chunks** (all 1000 files present and parsed): skipped entirely — old blocks never change.
