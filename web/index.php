@@ -1,35 +1,13 @@
 <?php
 // btc-slot-machine: Minimal O(1) PHP Filter Tester
-// Upload this file and the 'filter/' directory to your ALL-INKL web server!
+// Supports single lookup (?address_hex=...) and batch lookup (POST JSON body).
+// Upload this file and the 'filter/' directory to your web server.
 
 header('Content-Type: application/json');
 
 $startTime = microtime(true);
 
-// Accept the Hash160 (40-character Hex string) from the URL parameter
-// Example: index.php?address_hex=59b9b40f93d4a8989e02773a153b54a273ad1736
-$hex = $_GET['address_hex'] ?? '';
-
-if (strlen($hex) !== 40 || !ctype_xdigit($hex)) {
-    die(json_encode(['error' => 'Please provide a valid 40-char Hash160 hex string (e.g. ?address_hex=... )']));
-}
-
-$bytes = hex2bin($hex);
-
-// 1. Calculate the 64-bit FNV-1a Hash
-// (We use GMP here to prevent standard PHP floats/overflows on 64-bit math)
-$hash = gmp_init("14695981039346656037"); // 0xCBF29CE484222325
-$prime = gmp_init("1099511628211");      // 0x00000100000001B3
-$mask64 = gmp_init("18446744073709551615"); // 0xFFFFFFFFFFFFFFFF
-
-for ($i = 0; $i < 20; $i++) {
-    $byte = ord($bytes[$i]);
-    $hash = gmp_xor($hash, $byte);
-    $hash = gmp_and(gmp_mul($hash, $prime), $mask64);
-}
-
-// 2. O(1) Direct Disk Access Strategy
-// Find the largest available filter file to minimize false positives
+// ── Find largest available filter ────────────────────────────────────────────
 $availableFilters = [
     2048 => 34,
     1024 => 33,
@@ -40,13 +18,13 @@ $availableFilters = [
     32   => 28
 ];
 
-$filterFile = null;
+$filterFile    = null;
 $targetBitsExp = null;
 
 foreach ($availableFilters as $mb => $bits) {
     $checkPath = __DIR__ . '/filter/' . $mb . 'mb.bin';
     if (file_exists($checkPath)) {
-        $filterFile = $checkPath;
+        $filterFile    = $checkPath;
         $targetBitsExp = $bits;
         break;
     }
@@ -56,49 +34,79 @@ if (!$filterFile) {
     die(json_encode(['error' => 'No filter files found in the filter/ directory!']));
 }
 
-$tabS = 6; 
+// ── FNV-1a lookup (O(1) disk seek) ───────────────────────────────────────────
+$prime  = gmp_init("1099511628211");         // 0x00000100000001B3
+$mask64 = gmp_init("18446744073709551615");  // 0xFFFFFFFFFFFFFFFF
+$maskBitsGmp = gmp_sub(gmp_pow("2", $targetBitsExp), "1");
+$tabS = 6;
 $tabM = 63;
 
-// Emulate C++ logic precisely:
-// Mask the unused top bits while still in GMP space 
-// to ensure the resulting number securely fits into a standard PHP integer (< 63 bits)
-$maskBitsGmp = gmp_sub(gmp_pow("2", $targetBitsExp), "1");
-$h_trunc_gmp = gmp_and($hash, $maskBitsGmp);
+$fh = fopen($filterFile, 'rb');
 
-// Since $h_trunc is now safely capped (max 34 bits), 
-// we can convert it to a blazing fast native PHP integer without clamping bugs.
-$h_trunc = gmp_intval($h_trunc_gmp);
+function lookupHex($hex) {
+    global $fh, $prime, $mask64, $maskBitsGmp, $tabS, $tabM;
 
-// Calculate exact byte offset on the SSD for the read command
-$byteOffset = ($h_trunc >> $tabS) * 8; // 8 bytes per 64-bit chunk
+    $bytes = hex2bin($hex);
+    $hash  = gmp_init("14695981039346656037"); // FNV offset basis
 
-// O(1) Direct I/O: Open file, jump exactly to the offset, read 8 bytes, close.
-// (Consumes ~0 MB RAM regardless of filter size!)
-$f = fopen($filterFile, 'rb');
-fseek($f, $byteOffset);
-$chunkData = fread($f, 8);
-fclose($f);
+    for ($i = 0; $i < 20; $i++) {
+        $hash = gmp_xor($hash, ord($bytes[$i]));
+        $hash = gmp_and(gmp_mul($hash, $prime), $mask64);
+    }
 
-if ($chunkData === false || strlen($chunkData) !== 8) {
-    die(json_encode(['error' => 'File read error / unexpected EOF']));
+    $h_trunc    = gmp_intval(gmp_and($hash, $maskBitsGmp));
+    $byteOffset = ($h_trunc >> $tabS) * 8;
+
+    fseek($fh, $byteOffset);
+    $chunkData = fread($fh, 8);
+
+    if ($chunkData === false || strlen($chunkData) !== 8) return null;
+
+    $chunk  = unpack('P', $chunkData)[1];
+    $bitPos = 1 << ($h_trunc & $tabM);
+
+    return ($chunk & $bitPos) !== 0;
 }
 
-$chunkArray = unpack('P', $chunkData); // P = standard 64-bit unsigned little-endian integer
-$chunk = $chunkArray[1];
+// ── Resolve input: batch POST JSON or single GET param ───────────────────────
+$body = file_get_contents('php://input');
+$json = $body ? json_decode($body, true) : null;
 
-// Calculate exact bit index within the 8-byte chunk
-$bitPos = 1 << ($h_trunc & $tabM);
+if ($json && isset($json['addresses']) && is_array($json['addresses'])) {
+    // Batch mode
+    $results = [];
+    foreach ($json['addresses'] as $hex) {
+        if (strlen($hex) !== 40 || !ctype_xdigit($hex)) {
+            $results[$hex] = null; // invalid
+            continue;
+        }
+        $results[$hex] = lookupHex($hex);
+    }
 
-// Check if the bit is true
-$found = ($chunk & $bitPos) !== 0;
+    fclose($fh);
+    echo json_encode([
+        'filter_used' => basename($filterFile),
+        'results'     => $results,
+        'time_php_ms' => round((microtime(true) - $startTime) * 1000, 3)
+    ]);
 
-$durationMs = round((microtime(true) - $startTime) * 1000, 3);
+} else {
+    // Single mode (backward compat)
+    $hex = $_GET['address_hex'] ?? '';
 
-// Output result JSON
-echo json_encode([
-    'address_hex' => $hex,
-    'filter_used' => basename($filterFile),
-    'found'       => $found,
-    'time_php_ms' => $durationMs
-]);
+    if (strlen($hex) !== 40 || !ctype_xdigit($hex)) {
+        fclose($fh);
+        die(json_encode(['error' => 'Provide a valid 40-char Hash160 hex string (?address_hex=...)']));
+    }
+
+    $found = lookupHex($hex);
+    fclose($fh);
+
+    echo json_encode([
+        'address_hex' => $hex,
+        'filter_used' => basename($filterFile),
+        'found'       => $found,
+        'time_php_ms' => round((microtime(true) - $startTime) * 1000, 3)
+    ]);
+}
 ?>

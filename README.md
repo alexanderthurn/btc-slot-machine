@@ -69,8 +69,43 @@ If running locally, compile from the `parser/` directory first:
 
    To manually run a specific chunk: **`./main parse <chunk_index> [--debug]`**
 
-3. **`./main test <address_or_hash160>`**  
+3. **`./main test <address_or_hash160>`**
    Instantly verifies if an address exists in the generated filters.
+
+4. **`./main count`**
+   Scans all `blk*.dat` files in `blocks/` and counts every output type, unique addresses, transactions, inputs with visible public keys, and total BTC ever moved. Uses all available CPU cores. Saves a per-file checkpoint to `counts/` (up to ~25 GB disk) so a re-run skips already-processed files. Prints a full summary at the end:
+
+   ```
+   =================================================================
+     Bitcoin Blockchain Count
+   =================================================================
+     Blocks:                       850,000
+     Transactions:                 1,000,000,000
+       Coinbase:                   850,000
+       SegWit:                     600,000,000
+
+     Inputs:                       2,100,000,000
+       w/ visible pubkey:          500,000,000
+
+     Outputs:                      2,500,000,000
+       zero-value:                 12,000,000
+       P2PKH:                      1,200,000,000
+       P2SH:                         400,000,000
+       P2WPKH:                       600,000,000
+       P2WSH:                         50,000,000
+       P2PK compressed:               10,000,000
+       P2PK uncompressed:             20,000,000
+       P2TR (Taproot):                80,000,000
+       OP_RETURN:                     30,000,000
+       Other:                          5,000,000
+
+     Unique addr (P2PKH+P2SH+P2WPKH): 400,000,000
+
+     Total output value:           2,100,000.00000000 BTC
+   =================================================================
+   ```
+
+   > **RAM note:** the unique address deduplication loads all hash160s into memory for sorting (~30 GB peak). Make sure you have sufficient free RAM before running.
 
 ## Syncing Blocks from an External Source
 

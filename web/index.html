@@ -251,6 +251,12 @@
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function fmtMB(b) { return (b/1048576).toFixed(1)+' MB'; }
+function fmtFilterMB(mb) { return mb >= 1024 ? (mb/1024)+'G' : mb+'M'; }
+function fmtFilterName(filename) {
+    // e.g. "2048mb.bin" → "2G", "512mb.bin" → "512M"
+    const m = String(filename).match(/^(\d+)mb\.bin$/i);
+    return m ? fmtFilterMB(parseInt(m[1])) : filename;
+}
 function bytesToHex(b) { return Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join(''); }
 function hexToBytes(h) { return new Uint8Array(h.match(/.{2}/g).map(x=>parseInt(x,16))); }
 
@@ -716,7 +722,7 @@ async function doSpin(fixedWords) {
     ];
 
     const found = [];
-    let checked = 0;
+    let checked = 0, serverFilterLabel = null;
     const tAddr = performance.now();
 
     if (cf.view) {
@@ -737,21 +743,30 @@ async function doSpin(fixedWords) {
         }
         log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 found ' + found.length, found.length ? 'ok' : 'data');
 
-        // 6. Server verify — only on filter hits
+        // 6. Server verify — only on filter hits, one batch request
         if (found.length > 0) {
             log('verifying ' + found.length + ' hit(s) via server\u2026', 'dim');
-            for (let i = 0; i < found.length; i++) {
-                try {
-                    const resp = await fetch('index.php?address_hex=' + found[i].h160 + '&_cb=' + Date.now());
-                    const data = await resp.json();
-                    found[i].serverFound = data.found;
-                    log('server ' + (data.found ? 'CONFIRMED \u2713' : 'not confirmed') + ' ' + found[i].addr, data.found ? 'ok' : 'dim');
-                } catch(e) {
-                    found[i].serverFound = null;
-                    log('server error: ' + e.message, 'err');
+            try {
+                const resp = await fetch('index.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ addresses: found.map(function(f) { return f.h160; }) })
+                });
+                const data = await resp.json();
+                if (data.results) {
+                    serverFilterLabel = fmtFilterName(data.filter_used);
+                    for (let i = 0; i < found.length; i++) {
+                        found[i].serverFound = data.results[found[i].h160] === true;
+                        log('server ' + (found[i].serverFound ? 'CONFIRMED \u2713' : 'not confirmed') + ' ' + found[i].addr,
+                            found[i].serverFound ? 'ok' : 'dim');
+                    }
+                    log('server checked ' + found.length + ' \xb7 ' + data.filter_used + ' \xb7 ' + data.time_php_ms + 'ms', 'dim');
                 }
+            } catch(e) {
+                log('server error: ' + e.message, 'err');
             }
-            saveHitToHistory(words, found);
+            const confirmed = found.filter(function(f) { return f.serverFound === true; });
+            if (confirmed.length > 0) saveHitToHistory(words, confirmed);
         }
     } else {
         log('no filter loaded \u2014 load a filter above to check addresses', 'dim');
@@ -766,7 +781,16 @@ async function doSpin(fixedWords) {
     const anyConfirmed = found.some(function(f) { return f.serverFound === true; });
     box.className = found.length === 0 ? 'none' : anyConfirmed ? 'found-confirmed' : 'found-unconfirmed';
 
-    let html = '<div class="res-summary">Checked ' + checked + ' &middot; Found: ' + found.length + '</div>';
+    const localLabel = cf.sizeMB ? fmtFilterMB(cf.sizeMB) : '?';
+    const serverConfirmedCount = found.filter(function(f) { return f.serverFound === true; }).length;
+    let summary = 'Checked ' + checked;
+    if (found.length > 0) {
+        summary += ' &middot; Local (' + localLabel + '): ' + found.length;
+        if (serverFilterLabel !== null) summary += ' &middot; Server (' + serverFilterLabel + '): ' + serverConfirmedCount;
+    } else {
+        summary += ' &middot; Found: 0';
+    }
+    let html = '<div class="res-summary">' + summary + '</div>';
     for (let i = 0; i < found.length; i++) {
         const {type, addr, serverFound} = found[i];
         const srvHtml = serverFound === true

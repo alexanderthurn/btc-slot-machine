@@ -27,3 +27,4 @@ parser/blocks/
 parser/chunks/
 web/filter/
 parser/main
+parser/counts/

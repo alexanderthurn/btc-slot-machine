@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <csignal>
 #include <cstdint>
@@ -610,6 +611,325 @@ void cmdTest(const string &input) {
 }
 
 // ==============================================================================
+// 7. Command: Count
+// ==============================================================================
+
+struct FileCounts {
+  uint64_t blocks             = 0;
+  uint64_t transactions       = 0;
+  uint64_t inputs             = 0;
+  uint64_t outputs            = 0;
+  uint64_t outputs_zero_val   = 0;
+  uint64_t p2pkh              = 0;
+  uint64_t p2sh               = 0;
+  uint64_t p2wpkh             = 0;
+  uint64_t p2wsh              = 0;
+  uint64_t p2pk_compressed    = 0;
+  uint64_t p2pk_uncompressed  = 0;
+  uint64_t p2tr               = 0;
+  uint64_t op_return          = 0;
+  uint64_t other_output       = 0;
+  uint64_t segwit_tx          = 0;
+  uint64_t coinbase_tx        = 0;
+  uint64_t inputs_with_pubkey = 0;
+  uint64_t total_satoshis     = 0;
+};
+
+using Hash160 = array<uint8_t, 20>;
+static const uint64_t COUNT_MAGIC = 0x544E554F43435442ULL;
+static const uint32_t COUNT_VER   = 2;
+
+bool saveCountCp(const string &path, const FileCounts &fc,
+                 const vector<Hash160> &hashes) {
+  string tmp = path + ".tmp";
+  ofstream f(tmp, ios::binary | ios::trunc);
+  if (!f) return false;
+  f.write(reinterpret_cast<const char *>(&COUNT_MAGIC), 8);
+  f.write(reinterpret_cast<const char *>(&COUNT_VER), 4);
+  f.write(reinterpret_cast<const char *>(&fc), sizeof(fc));
+  uint64_t n = hashes.size();
+  f.write(reinterpret_cast<const char *>(&n), 8);
+  if (n) f.write(reinterpret_cast<const char *>(hashes.data()), n * 20);
+  f.close();
+  if (!f.good()) { try { fs::remove(tmp); } catch (...) {} return false; }
+  fs::rename(tmp, path);
+  return true;
+}
+
+bool loadCountCp(const string &path, FileCounts &fc,
+                 vector<Hash160> &hashes) {
+  ifstream f(path, ios::binary);
+  if (!f) return false;
+  uint64_t magic; uint32_t ver;
+  f.read(reinterpret_cast<char *>(&magic), 8);
+  f.read(reinterpret_cast<char *>(&ver), 4);
+  if (magic != COUNT_MAGIC || ver != COUNT_VER) return false;
+  f.read(reinterpret_cast<char *>(&fc), sizeof(fc));
+  uint64_t n;
+  f.read(reinterpret_cast<char *>(&n), 8);
+  hashes.resize(n);
+  if (n) f.read(reinterpret_cast<char *>(hashes.data()), n * 20);
+  return f.good();
+}
+
+FileCounts processCountFile(const string &filepath, vector<Hash160> &hashes) {
+  FileCounts fc;
+  ifstream file(filepath, ios::binary);
+  if (!file) return fc;
+
+  uint32_t magic, blockSize;
+  while (file.read(reinterpret_cast<char *>(&magic), 4)) {
+    if (magic != 0xD9B4BEF9) { file.seekg(-3, ios::cur); continue; }
+    if (!file.read(reinterpret_cast<char *>(&blockSize), 4)) break;
+    auto blockStart = file.tellg();
+    file.seekg(80, ios::cur);
+    fc.blocks++;
+
+    uint64_t txCount = readVarInt(file);
+    fc.transactions += txCount;
+
+    for (uint64_t ti = 0; ti < txCount; ++ti) {
+      uint32_t version;
+      file.read(reinterpret_cast<char *>(&version), 4);
+
+      bool isSW = false;
+      {
+        auto cPos = file.tellg();
+        uint8_t m[2];
+        if (file.read(reinterpret_cast<char *>(m), 2)) {
+          if (m[0] == 0x00 && m[1] == 0x01) isSW = true;
+          else file.seekg(cPos);
+        }
+      }
+      if (isSW) fc.segwit_tx++;
+
+      uint64_t inC = readVarInt(file);
+      fc.inputs += inC;
+      if (ti == 0) fc.coinbase_tx++;
+
+      for (uint64_t i = 0; i < inC; ++i) {
+        file.seekg(36, ios::cur);
+        uint64_t sLen = readVarInt(file);
+        // For non-coinbase inputs: check if scriptSig ends with a compressed
+        // pubkey push (P2PKH spend pattern: ... 0x21 <02/03 + 32 bytes>)
+        if (ti != 0 && sLen >= 34) {
+          vector<uint8_t> sc(sLen);
+          file.read(reinterpret_cast<char *>(sc.data()), sLen);
+          size_t off = sLen - 34;
+          if (sc[off] == 0x21 && (sc[off+1] == 0x02 || sc[off+1] == 0x03))
+            fc.inputs_with_pubkey++;
+        } else {
+          file.seekg(sLen, ios::cur);
+        }
+        file.seekg(4, ios::cur); // sequence
+      }
+
+      uint64_t outC = readVarInt(file);
+      fc.outputs += outC;
+
+      for (uint64_t i = 0; i < outC; ++i) {
+        uint64_t val;
+        file.read(reinterpret_cast<char *>(&val), 8);
+        uint64_t sLen = readVarInt(file);
+        vector<uint8_t> sc(sLen);
+        file.read(reinterpret_cast<char *>(sc.data()), sLen);
+
+        fc.total_satoshis += val;
+        if (val == 0) fc.outputs_zero_val++;
+
+        Hash160 h;
+        if (sLen == 25 && sc[0]==0x76 && sc[1]==0xa9 && sc[2]==0x14 &&
+            sc[23]==0x88 && sc[24]==0xac) {
+          fc.p2pkh++;
+          memcpy(h.data(), sc.data()+3, 20); hashes.push_back(h);
+        } else if (sLen == 23 && sc[0]==0xa9 && sc[1]==0x14 && sc[22]==0x87) {
+          fc.p2sh++;
+          memcpy(h.data(), sc.data()+2, 20); hashes.push_back(h);
+        } else if (sLen == 22 && sc[0]==0x00 && sc[1]==0x14) {
+          fc.p2wpkh++;
+          memcpy(h.data(), sc.data()+2, 20); hashes.push_back(h);
+        } else if (sLen == 34 && sc[0]==0x00 && sc[1]==0x20) {
+          fc.p2wsh++;
+        } else if (sLen == 35 && sc[0]==0x21 && sc[34]==0xac) {
+          fc.p2pk_compressed++;
+        } else if (sLen == 67 && sc[0]==0x41 && sc[66]==0xac) {
+          fc.p2pk_uncompressed++;
+        } else if (sLen == 34 && sc[0]==0x51 && sc[1]==0x20) {
+          fc.p2tr++;
+        } else if (sLen >= 1 && sc[0]==0x6a) {
+          fc.op_return++;
+        } else {
+          fc.other_output++;
+        }
+      }
+
+      if (isSW) {
+        for (uint64_t i = 0; i < inC; ++i) {
+          uint64_t wItems = readVarInt(file);
+          for (uint64_t w = 0; w < wItems; ++w) {
+            uint64_t iLen = readVarInt(file);
+            file.seekg(iLen, ios::cur);
+          }
+        }
+      }
+      file.seekg(4, ios::cur); // locktime
+    }
+    file.seekg(blockStart + static_cast<streamoff>(blockSize));
+  }
+
+  sort(hashes.begin(), hashes.end());
+  return fc;
+}
+
+static string fmtNum(uint64_t n) {
+  string s = to_string(n);
+  for (int i = (int)s.size() - 3; i > 0; i -= 3)
+    s.insert(s.begin() + i, ',');
+  return s;
+}
+
+static string fmtBTC(uint64_t sat) {
+  uint64_t whole = sat / 100000000ULL;
+  uint64_t frac  = sat % 100000000ULL;
+  string fs = to_string(frac);
+  while (fs.size() < 8) fs = "0" + fs;
+  return fmtNum(whole) + "." + fs + " BTC";
+}
+
+void cmdCount() {
+  string blocksDir = "blocks";
+  string countDir  = "counts";
+
+  if (!fs::exists(blocksDir)) { cerr << "'blocks' directory not found\n"; return; }
+  if (!fs::exists(countDir)) fs::create_directory(countDir);
+
+  vector<string> datFiles;
+  for (const auto &entry : fs::directory_iterator(blocksDir)) {
+    if (entry.path().extension() == ".dat") {
+      string fn = entry.path().filename().string();
+      if (fn.length() == 12 && fn.substr(0, 3) == "blk")
+        datFiles.push_back(entry.path().string());
+    }
+  }
+  sort(datFiles.begin(), datFiles.end());
+
+  cout << "Found " << datFiles.size() << " .dat files.\n";
+  cout << "Note: checkpoint files in counts/ may use up to ~25 GB of disk.\n\n";
+
+  unsigned int numThreads = thread::hardware_concurrency();
+  if (!numThreads) numThreads = 4;
+  cout << "Scanning with " << numThreads << " threads...\n";
+
+  // Per-file scalar results (indexed by file, no lock needed)
+  vector<FileCounts> fileCounts(datFiles.size());
+
+  // Global hash pool for unique counting (~30 GB peak, pre-reserved as virtual memory)
+  vector<Hash160> allHashes;
+  try { allHashes.reserve(1500000000ULL); }
+  catch (...) { cout << "[WARN] Could not pre-reserve hash buffer — may reallocate.\n"; }
+
+  atomic<size_t> fileIdx(0), nParsed(0), nCached(0);
+  mutex hashesMtx, coutMtx;
+
+  vector<thread> threads;
+  for (unsigned int t = 0; t < numThreads; ++t) {
+    threads.emplace_back([&]() {
+      while (true) {
+        size_t idx = fileIdx.fetch_add(1);
+        if (idx >= datFiles.size()) break;
+
+        const string &fp = datFiles[idx];
+        string fn        = fs::path(fp).filename().string();
+        string cpPath    = countDir + "/" + fn + ".bin";
+
+        FileCounts fc;
+        vector<Hash160> localHashes;
+
+        if (loadCountCp(cpPath, fc, localHashes)) {
+          nCached.fetch_add(1);
+        } else {
+          fc = processCountFile(fp, localHashes);
+          saveCountCp(cpPath, fc, localHashes);
+          nParsed.fetch_add(1);
+          lock_guard<mutex> lk(coutMtx);
+          cout << "  parsed " << fn << "\n";
+        }
+
+        fileCounts[idx] = fc;
+        {
+          lock_guard<mutex> lk(hashesMtx);
+          allHashes.insert(allHashes.end(),
+                           localHashes.begin(), localHashes.end());
+        }
+      }
+    });
+  }
+  for (auto &t : threads) t.join();
+
+  cout << "\nParsed: " << nParsed << "  Cached: " << nCached << "\n";
+  cout << "Aggregating...\n";
+
+  FileCounts total;
+  for (const auto &fc : fileCounts) {
+    total.blocks             += fc.blocks;
+    total.transactions       += fc.transactions;
+    total.inputs             += fc.inputs;
+    total.outputs            += fc.outputs;
+    total.outputs_zero_val   += fc.outputs_zero_val;
+    total.p2pkh              += fc.p2pkh;
+    total.p2sh               += fc.p2sh;
+    total.p2wpkh             += fc.p2wpkh;
+    total.p2wsh              += fc.p2wsh;
+    total.p2pk_compressed    += fc.p2pk_compressed;
+    total.p2pk_uncompressed  += fc.p2pk_uncompressed;
+    total.p2tr               += fc.p2tr;
+    total.op_return          += fc.op_return;
+    total.other_output       += fc.other_output;
+    total.segwit_tx          += fc.segwit_tx;
+    total.coinbase_tx        += fc.coinbase_tx;
+    total.inputs_with_pubkey += fc.inputs_with_pubkey;
+    total.total_satoshis     += fc.total_satoshis;
+  }
+
+  cout << "Sorting " << fmtNum(allHashes.size()) << " address occurrences...\n";
+  sort(allHashes.begin(), allHashes.end());
+
+  uint64_t uniqueAddr = allHashes.empty() ? 0 : 1;
+  for (size_t i = 1; i < allHashes.size(); ++i)
+    if (allHashes[i] != allHashes[i-1]) uniqueAddr++;
+  allHashes.clear();
+
+  cout << "\n";
+  cout << "=================================================================\n";
+  cout << "  Bitcoin Blockchain Count\n";
+  cout << "=================================================================\n";
+  cout << "  Blocks:                       " << fmtNum(total.blocks)             << "\n";
+  cout << "  Transactions:                 " << fmtNum(total.transactions)       << "\n";
+  cout << "    Coinbase:                   " << fmtNum(total.coinbase_tx)        << "\n";
+  cout << "    SegWit:                     " << fmtNum(total.segwit_tx)          << "\n";
+  cout << "\n";
+  cout << "  Inputs:                       " << fmtNum(total.inputs)             << "\n";
+  cout << "    w/ visible pubkey:          " << fmtNum(total.inputs_with_pubkey) << "\n";
+  cout << "\n";
+  cout << "  Outputs:                      " << fmtNum(total.outputs)            << "\n";
+  cout << "    zero-value:                 " << fmtNum(total.outputs_zero_val)   << "\n";
+  cout << "    P2PKH:                      " << fmtNum(total.p2pkh)              << "\n";
+  cout << "    P2SH:                       " << fmtNum(total.p2sh)               << "\n";
+  cout << "    P2WPKH:                     " << fmtNum(total.p2wpkh)             << "\n";
+  cout << "    P2WSH:                      " << fmtNum(total.p2wsh)              << "\n";
+  cout << "    P2PK compressed:            " << fmtNum(total.p2pk_compressed)    << "\n";
+  cout << "    P2PK uncompressed:          " << fmtNum(total.p2pk_uncompressed)  << "\n";
+  cout << "    P2TR (Taproot):             " << fmtNum(total.p2tr)               << "\n";
+  cout << "    OP_RETURN:                  " << fmtNum(total.op_return)          << "\n";
+  cout << "    Other:                      " << fmtNum(total.other_output)       << "\n";
+  cout << "\n";
+  cout << "  Unique addr (P2PKH+P2SH+P2WPKH): " << fmtNum(uniqueAddr)          << "\n";
+  cout << "\n";
+  cout << "  Total output value:           " << fmtBTC(total.total_satoshis)    << "\n";
+  cout << "=================================================================\n";
+}
+
+// ==============================================================================
 // CLI Parser
 // ==============================================================================
 void printHelp() {
@@ -624,6 +944,9 @@ void printHelp() {
           "address.\n";
   cout << "  build                    Compresses all chunks into the final "
           "'final_filter_table.bin'.\n";
+  cout << "  count                    Scans all blk*.dat files, counts address\n";
+  cout << "                           types, unique addresses, transactions, BTC\n";
+  cout << "                           moved. Saves per-file checkpoints to counts/.\n";
   cout << "  test <address_or_hash>   Loads the 512MB filter into RAM and "
           "verifies an address.\n";
   cout << "                           Accepts: Base58 Address (1A1zP...) or "
@@ -666,6 +989,8 @@ int main(int argc, char *argv[]) {
     cmdParse(chunk_index, debug);
   } else if (command == "build") {
     cmdBuild();
+  } else if (command == "count") {
+    cmdCount();
   } else if (command == "test") {
     if (argc < 3) {
       cerr << "Missing address or hash element to test.\n";
