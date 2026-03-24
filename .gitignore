@@ -23,16 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-public/assets
-.assetpack
-src/manifest.json
-*.dat
-todo/xr
-todo/download_blocks
-todo/chunks/*.bin
-todo/main
-todo/filter/128mb.bin
-todo/filter/256mb.bin
-todo/filter/512mb.bin
-todo/filter/1024mb.bin
-todo/filter/2048mb.bin
+blocks/
+chunks/
+filter/
+main
