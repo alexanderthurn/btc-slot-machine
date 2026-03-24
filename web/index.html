@@ -191,7 +191,9 @@
             margin-bottom: 5px;
             font-family: monospace;
             font-size: 11px;
+            cursor: pointer;
         }
+        .hits-entry:hover { background: #eaffea; border-color: #5cb85c; }
         .hits-entry-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3px; }
         .hits-entry-ts { font-size: 10px; color: #bbb; }
         .hits-entry-words { color: #555; word-break: break-word; margin-bottom: 4px; }
@@ -264,6 +266,7 @@
     <div class="hits-hdr">
         <span class="hits-lbl">Recent Hits</span>
         <button class="hits-clr" onclick="clearHits()">clear</button>
+        <a href="#" onclick="event.preventDefault();doSpin(Array(11).fill('abandon').concat(['about']))" class="hits-clr" title="11× abandon + about — known funded test mnemonic">test</a>
     </div>
     <div id="hitsList"></div>
 </div>
@@ -309,12 +312,26 @@ function fnv1a(hex20) {
 }
 
 // Compute server-side bloom filter position for 2G filter (bitsExp=34).
-// Returns [row, col] — PHP can fseek(row*8) and check bit col without any GMP.
+// Returns [row, col] — PHP does fseek(row*8) and checks bit col, no GMP needed.
 const SERVER_MASK = (1n << 34n) - 1n;
 function serverPos(hex20) {
     const trunc = fnv1a(hex20) & SERVER_MASK;
     return [Number(trunc >> 6n), Number(trunc & 63n)];
 }
+
+// Pack [[row,col],...] into a binary buffer: 5 bytes per lookup (uint32 LE row + uint8 col).
+function packLookups(positions) {
+    const buf  = new ArrayBuffer(positions.length * 5);
+    const view = new DataView(buf);
+    for (let i = 0; i < positions.length; i++) {
+        view.setUint32(i * 5,     positions[i][0], true);
+        view.setUint8 (i * 5 + 4, positions[i][1]);
+    }
+    return buf;
+}
+
+// Read bitmask result: bit i of 8-byte Uint32Array [lo, hi].
+function readBit(buf, i) { return i < 32 ? (buf[0] >> i) & 1 : (buf[1] >> (i - 32)) & 1; }
 
 // ── INDEXEDDB CACHE ───────────────────────────────────────────────────────────
 function openDB() {
@@ -666,6 +683,13 @@ function clearHits() {
     renderHitsHistory();
 }
 
+function loadHit(idx) {
+    const hist = JSON.parse(localStorage.getItem(HITS_KEY) || '[]');
+    const entry = hist[idx];
+    if (!entry) return;
+    doSpin(entry.words);
+}
+
 function renderHitsHistory() {
     const hist = JSON.parse(localStorage.getItem(HITS_KEY) || '[]');
     const section = document.getElementById('hitsSection');
@@ -673,27 +697,30 @@ function renderHitsHistory() {
     if (!hist.length) { section.style.display = 'none'; return; }
     section.style.display = '';
     list.innerHTML = '';
-    hist.forEach(function(entry) {
+    hist.forEach(function(entry, idx) {
         const div = document.createElement('div');
         div.className = 'hits-entry';
-        const urlParam = wordsToUrlParam(entry.words);
+        div.style.cursor = 'pointer';
         const ts = new Date(entry.ts).toLocaleString();
         let addrHtml = '';
         entry.found.forEach(function(f) {
             const srv = f.serverFound === true ? ' <span style="color:#1a7a1a">\u2713srv</span>'
                       : f.serverFound === false ? ' <span style="color:#888">?srv</span>' : '';
-            addrHtml += '<div class="hits-entry-addr">'
-                + esc(f.type) + ' ' + esc(f.addr) + srv
-                + ' <a href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank">mempool&#8599;</a>'
+            addrHtml += '<div class="hits-entry-addr" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">'
+                + '<span>' + esc(f.type) + ' ' + esc(f.addr) + srv + '</span>'
+                + '<span class="res-bal" style="font-size:11px;font-family:monospace;white-space:nowrap;flex:1;color:#888"></span>'
+                + '<a href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank" onclick="event.stopPropagation()" class="res-link">mempool&#8599;</a>'
                 + '</div>';
         });
         div.innerHTML = '<div class="hits-entry-top">'
-            + '<span class="hits-entry-words">'
-            + '<a href="?m=' + encodeURIComponent(urlParam) + '" title="Load this mnemonic">' + esc(entry.words.join(' ')) + '</a>'
-            + '</span>'
+            + '<span class="hits-entry-words">' + esc(entry.words.join(' ')) + '</span>'
+            + '<span style="display:flex;align-items:baseline;gap:6px;margin-left:auto">'
+            + '<button class="hits-clr" onclick="event.stopPropagation();checkBalancesIn(this,this.closest(\'.hits-entry\'))">bal</button>'
             + '<span class="hits-entry-ts">' + esc(ts) + '</span>'
+            + '</span>'
             + '</div>'
             + addrHtml;
+        div.addEventListener('click', function() { loadHit(idx); });
         list.appendChild(div);
     });
 }
@@ -749,20 +776,13 @@ async function flushPendingHits() {
     log('batch: checking ' + uniqueH160s.length + ' addr from ' + batch.length + ' local hits\u2026', 'dim');
     try {
         const t0   = performance.now();
-        const resp = await fetch('index.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lookups: lookups })
-        });
-        // Response is 8 raw bytes: uint64 LE bitmask, bit i = lookup[i] matched
+        const resp = await fetch('index.php', { method: 'POST', body: packLookups(lookups) });
         const buf  = new Uint32Array(await resp.arrayBuffer()); // [lo, hi]
         const ms   = (performance.now() - t0).toFixed(1);
 
-        function hitBit(i) { return i < 32 ? (buf[0] >> i) & 1 : (buf[1] >> (i - 32)) & 1; }
-
         // Build h160 → bool map from positional bitmask
         const h160Result = {};
-        for (let i = 0; i < uniqueH160s.length; i++) h160Result[uniqueH160s[i]] = hitBit(i) === 1;
+        for (let i = 0; i < uniqueH160s.length; i++) h160Result[uniqueH160s[i]] = readBit(buf, i) === 1;
 
         // Group confirmed items by mnemonic
         const byMnemonic = {};
@@ -791,6 +811,40 @@ async function flushPendingHits() {
     } catch(e) {
         log('batch server error: ' + e.message, 'err');
     }
+}
+
+async function checkBalancesIn(btn, container) {
+    btn.disabled = true;
+    btn.textContent = '\u2026';
+    const btc = function(sat) { return (sat / 1e8).toFixed(8) + '\xa0BTC'; };
+    const rows = container.querySelectorAll('.res-item, .hits-entry-addr');
+    for (let i = 0; i < rows.length; i++) {
+        const addrEl = rows[i].querySelector('.res-addr') || rows[i].querySelector('span');
+        const balEl  = rows[i].querySelector('.res-bal');
+        if (!addrEl || !balEl) continue;
+        // extract address: res-addr has just the address; hits-entry-addr span has "type addr ✓srv"
+        const addrText = (addrEl.className === 'res-addr')
+            ? addrEl.textContent.trim()
+            : addrEl.textContent.trim().split(/\s+/)[1];
+        if (!addrText) continue;
+        balEl.textContent = '\u2026';
+        try {
+            const resp = await fetch('https://mempool.space/api/address/' + encodeURIComponent(addrText));
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data    = await resp.json();
+            const funded  = data.chain_stats.funded_txo_sum;
+            const balance = funded - data.chain_stats.spent_txo_sum;
+            balEl.style.color = funded > 0 ? (balance > 0 ? '#1a7a1a' : '#888') : '#bbb';
+            balEl.textContent  = funded > 0
+                ? 'bal\xa0' + btc(balance) + '\xa0·\xa0rcv\xa0' + btc(funded)
+                : 'no history';
+        } catch(e) {
+            balEl.style.color   = '#c00';
+            balEl.textContent   = e.message;
+        }
+    }
+    btn.textContent = 'bal';
+    btn.disabled = false;
 }
 
 function updateAutoStats() {
@@ -905,16 +959,12 @@ async function doSpin(fixedWords) {
                 log('verifying ' + found.length + ' hit(s) via server\u2026', 'dim');
                 try {
                     const t0s  = performance.now();
-                    const resp = await fetch('index.php', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ lookups: found.map(function(f) { return serverPos(f.h160); }) })
-                    });
-                    const buf = new Uint32Array(await resp.arrayBuffer());
-                    const msS = (performance.now() - t0s).toFixed(1);
+                    const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.h160); })) });
+                    const buf  = new Uint32Array(await resp.arrayBuffer());
+                    const msS  = (performance.now() - t0s).toFixed(1);
                     serverFilterLabel = '2G';
                     for (let i = 0; i < found.length; i++) {
-                        found[i].serverFound = ((i < 32 ? (buf[0] >> i) : (buf[1] >> (i-32))) & 1) === 1;
+                        found[i].serverFound = readBit(buf, i) === 1;
                         log('server ' + (found[i].serverFound ? 'CONFIRMED \u2713' : 'not confirmed') + ' ' + found[i].addr,
                             found[i].serverFound ? 'ok' : 'dim');
                     }
@@ -965,6 +1015,7 @@ async function doSpin(fixedWords) {
             + '<span class="res-type">' + esc(f.type) + '</span>'
             + '<span class="res-addr">' + esc(f.addr) + '</span>'
             + srvHtml
+            + '<span class="res-bal" style="font-size:11px;font-family:monospace;white-space:nowrap;flex:1"></span>'
             + '<a class="res-link" href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank">mempool&#8599;</a>'
             + '</div>';
     }
@@ -972,7 +1023,10 @@ async function doSpin(fixedWords) {
     const confirmed = found.filter(function(f) { return f.serverFound === true; });
     const localOnly = found.filter(function(f) { return f.serverFound !== true; });
 
-    let html = '<div class="res-summary">' + summary + '</div>';
+    let html = '<div class="res-summary" style="display:flex;align-items:baseline">'
+        + '<span>' + summary + '</span>'
+        + (confirmed.length > 0 ? '<button class="hits-clr" style="margin-left:auto" onclick="checkBalancesIn(this,document.getElementById(\'resultsBox\'))">bal</button>' : '')
+        + '</div>';
     for (let i = 0; i < confirmed.length; i++) html += resItemHtml(confirmed[i]);
 
     if (localOnly.length > 0) {
@@ -1004,23 +1058,6 @@ window.addEventListener('DOMContentLoaded', async function() {
     await refreshIDBState();
     renderHitsHistory();
 
-    // Restore mnemonic from URL if present
-    const urlParam = new URLSearchParams(window.location.search).get('m');
-    if (urlParam) {
-        try {
-            const words = urlParamToWords(urlParam);
-            if (words) {
-                currentWords = words;
-                for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
-                document.getElementById('btnCopy').style.display = '';
-                document.getElementById('statusLine').textContent = words.join(' ');
-                log('mnemonic loaded from URL', 'dim');
-            }
-        } catch(e) {
-            log('could not decode URL mnemonic', 'err');
-        }
-    }
-
     const lastMB = parseInt(localStorage.getItem('btc_active_filter') || '0');
     if (lastMB) {
         const cached = await idbLoad(lastMB);
@@ -1032,6 +1069,17 @@ window.addEventListener('DOMContentLoaded', async function() {
         }
     } else {
         log('ready \u2014 no filter loaded', 'dim');
+    }
+
+    // If URL has a mnemonic, spin with it immediately (doSpin auto-downloads filter if needed)
+    const urlParam = new URLSearchParams(window.location.search).get('m');
+    if (urlParam) {
+        try {
+            const words = urlParamToWords(urlParam);
+            if (words) doSpin(words);
+        } catch(e) {
+            log('could not decode URL mnemonic', 'err');
+        }
     }
 });
 </script>
