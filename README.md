@@ -5,13 +5,19 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
 ## The Unified Command-Line Tool
 
 ### Core Features
-1. **Frontend (`index.html`)**: 
-   - Supports Legacy, SegWit, and Taproot addresses.
-   - Offline decoding and Hash160 calculation via JavaScript.
-   - Persistent "Recent Checks" history with mempool links.
-   - Performance metrics for both client and server processing.
+1. **Slot Machine (`index.html`)**:
+   - Generates a random BIP39 mnemonic (12 words) on each spin.
+   - Derives BIP32 HD addresses (P2PKH, P2SH-P2WPKH, P2WPKH) for paths m/44', m/49', m/84'.
+   - Checks 60 addresses per spin against the locally loaded bloom filter.
+   - Local filter cached in IndexedDB — no re-download on reload.
 
-2. **C++ Preprocessing (`todo/main.cpp`)**:
+2. **Filter Test (`test.html`)**:
+   - Direct address lookup: Base58, Bech32, Hash160, or public key input.
+   - Client-side lookup (JS, sub-millisecond) vs. server-side (`test.php`, all filter sizes).
+   - Shows per-filter results from server for comparison and debugging.
+   - Persistent history with mempool links.
+
+3. **C++ Preprocessing (`main.cpp`)**:
    - Parallelized parsing using all available CPU cores via `std::thread`.
    - Thread-safe Bloom filter updates using `std::atomic<uint64_t>`.
    - All 7 filter arrays (~4 GB total) kept in RAM for the entire run — loaded once at startup, saved after each chunk as a checkpoint.
@@ -21,9 +27,13 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
    - Fully dynamic multi-tiered filter generation (32MB up to 2GB).
    - O(1) direct-to-disk verification for testing addresses without loading massive filters into RAM.
 
-3. **Backend API (`index.php`)**:
-   - Zero-RAM footprint: Queries filter files directly from disk via byte offsets.
-   - Ultra-low latency: Typically < 1ms processing time.
+4. **Backend API (`index.php`)**:
+   - Used by the slot machine. Queries the largest available filter via O(1) disk seek.
+   - Zero-RAM footprint. Typically < 1ms processing time.
+
+5. **Debug API (`test.php`)**:
+   - Used by the filter test page. Queries all available filter sizes in one request.
+   - Returns per-filter results so you can compare accuracy across sizes.
 
 ## Installation & Setup
 
@@ -37,7 +47,7 @@ The easiest way to run the parser is via Docker. The container is fully signal-a
 
 ```bash
 # 1. Build the image
-docker build -t btc-parser todo/
+docker build -t btc-parser .
 
 # 2. Run the parser
 # Mount your bitcoin blocks directory and the output filter directory
