@@ -266,7 +266,7 @@
     <div class="hits-hdr">
         <span class="hits-lbl">Recent Hits</span>
         <button class="hits-clr" onclick="clearHits()">clear</button>
-        <a href="#" onclick="event.preventDefault();doSpin(Array(11).fill('abandon').concat(['about']))" class="hits-clr" title="11× abandon + about — known funded test mnemonic">test</a>
+        <a href="#" onclick="event.preventDefault();doSpin(Array(11).fill('abandon').concat(['about']),{serverOnly:true})" class="hits-clr" title="11× abandon + about — known funded test mnemonic, checks server directly">test</a>
     </div>
     <div id="hitsList"></div>
 </div>
@@ -749,6 +749,7 @@ function setSlotWord(idx, word) {
 // ── AUTOSPIN ──────────────────────────────────────────────────────────────────
 let autoSpinning     = false;
 let totalSpins       = 0;
+let totalAddresses   = 0;
 let spinsAtLastMatch = 0;
 let lastMatchTime    = null;
 const pageStartTime  = Date.now();
@@ -852,8 +853,11 @@ function updateAutoStats() {
     const elapsed = (now - pageStartTime) / 1000;
     const spsAll  = elapsed > 0 ? (totalSpins / elapsed).toFixed(2) : '0.00';
 
+    const apsAll = elapsed > 0 ? (totalAddresses / elapsed).toFixed(1) : '0.0';
     let html = totalSpins.toLocaleString() + ' spins'
-        + '<span class="stat-sep">·</span>' + spsAll + '/s overall';
+        + '<span class="stat-sep">·</span>' + spsAll + '/s'
+        + '<span class="stat-sep">·</span>' + totalAddresses.toLocaleString() + ' addr'
+        + '<span class="stat-sep">·</span>' + apsAll + '/s';
 
     if (lastMatchTime !== null) {
         const sinceMatchSec   = (now - lastMatchTime) / 1000;
@@ -896,7 +900,12 @@ async function onAutoChange() {
 }
 
 // ── SPIN ──────────────────────────────────────────────────────────────────────
-async function doSpin(fixedWords) {
+async function doSpin(fixedWords, opts) {
+    try { return await _doSpin(fixedWords, opts); }
+    catch(e) { log('ERROR: ' + e.message + (e.stack ? '\n' + e.stack.split('\n')[1] : ''), 'err'); document.getElementById('btnSpin').disabled = false; return false; }
+}
+async function _doSpin(fixedWords, opts) {
+    const serverOnly = !!(opts && opts.serverOnly);
     const isAuto = autoSpinning; // capture now — consistent for the whole spin
     const btn = document.getElementById('btnSpin');
     btn.disabled = true;
@@ -933,49 +942,139 @@ async function doSpin(fixedWords) {
     let checked = 0, serverFilterLabel = null;
     const tAddr = performance.now();
 
-    if (cf.view) {
+
+    if (serverOnly) {
+        // Skip local filter — derive all 60, check all against server directly
+        if (!isAuto) log('server-only check (no local filter required)\u2026', 'dim');
         for (let pi = 0; pi < pathDefs.length; pi++) {
             const {path, type, fn} = pathDefs[pi];
-            const account = await derivePath(seed, path);
+            const acct = await derivePath(seed, path);
             for (let n = 0; n < 20; n++) {
-                const child = await childKey(account, n, false);
+                const child = await childKey(acct, n, false);
                 const {addr, h160} = fn(child.key);
-                const res = clientLookup(h160);
                 checked++;
-                if (res && res.found) {
-                    found.push({type, addr, h160, serverFound: null});
-                    if (!isAuto) log('HIT ' + type + ' [' + path + '/' + n + '] ' + addr, 'ok');
-                }
+                found.push({type, addr, h160, serverFound: null});
             }
         }
-        if (!isAuto) log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 found ' + found.length, found.length ? 'ok' : 'data');
+        try {
+            const t0s = performance.now();
+            const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.h160); })) });
+            const buf  = new Uint32Array(await resp.arrayBuffer());
+            serverFilterLabel = '2G';
+            for (let i = 0; i < found.length; i++) found[i].serverFound = readBit(buf, i) === 1;
+            const hits = found.filter(function(f) { return f.serverFound; });
+            if (!isAuto) log('server: ' + hits.length + ' confirmed / ' + found.length + ' checked \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', hits.length ? 'ok' : 'data');
+            // keep only server hits in found for display
+            found.splice(0, found.length, ...hits);
+            if (hits.length > 0) saveHitToHistory(words, hits);
+        } catch(e) { log('server error: ' + e.message, 'err'); }
+    } else if (cf.view) {
+        // Phase 1: check first 5 (P2PKH indices 0..4) — bail early if no hit
+        const acct0 = await derivePath(seed, pathDefs[0].path);
+        for (let n = 0; n < 5; n++) {
+            const child = await childKey(acct0, n, false);
+            const {addr, h160} = pathDefs[0].fn(child.key);
+            checked++;
+            const res = clientLookup(h160);
+            if (res && res.found) {
+                found.push({type: pathDefs[0].type, addr, h160, serverFound: null});
+                if (!isAuto) log('HIT ' + pathDefs[0].type + ' [0/' + n + '] ' + addr, 'ok');
+            }
+        }
 
-        // 6. Server verify — batched during autospin, inline during manual
-        if (found.length > 0) {
-            if (isAuto) {
-                for (let i = 0; i < found.length; i++)
-                    pendingHits.push({ words: words, type: found[i].type, addr: found[i].addr, h160: found[i].h160 });
+        if (found.length === 0) {
+            if (!isAuto) log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 no match', 'data');
+            btn.disabled = false;
+            totalSpins++;
+            totalAddresses += checked;
+            updateAutoStats();
+            return false;
+        }
+
+        // Manual: quick server check on phase 1 hits — bail if not confirmed
+        if (!isAuto) {
+            try {
+                const t0s = performance.now();
+                const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.h160); })) });
+                const buf  = new Uint32Array(await resp.arrayBuffer());
+                serverFilterLabel = '2G';
+                for (let i = 0; i < found.length; i++) found[i].serverFound = readBit(buf, i) === 1;
+                log('quick server check \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', 'dim');
+            } catch(e) { log('server error: ' + e.message, 'err'); }
+            if (!found.some(function(f) { return f.serverFound === true; })) {
+                log('false positive \xb7 skipping remaining 55', 'dim');
+                btn.disabled = false;
+                totalSpins++;
+                totalAddresses += checked;
+                updateAutoStats();
+                // fall through to show resultsBox with the unconfirmed hit
             } else {
-                log('verifying ' + found.length + ' hit(s) via server\u2026', 'dim');
+                // Phase 2: check remaining 55 (P2PKH 5..19 + P2SH + P2WPKH)
+                for (let n = 5; n < 20; n++) {
+                    const child = await childKey(acct0, n, false);
+                    const {addr, h160} = pathDefs[0].fn(child.key);
+                    checked++;
+                    const res = clientLookup(h160);
+                    if (res && res.found) {
+                        found.push({type: pathDefs[0].type, addr, h160, serverFound: null});
+                        log('HIT ' + pathDefs[0].type + ' [0/' + n + '] ' + addr, 'ok');
+                    }
+                }
+                for (let pi = 1; pi < pathDefs.length; pi++) {
+                    const {path, type, fn} = pathDefs[pi];
+                    const acct = await derivePath(seed, path);
+                    for (let n = 0; n < 20; n++) {
+                        const child = await childKey(acct, n, false);
+                        const {addr, h160} = fn(child.key);
+                        checked++;
+                        const res = clientLookup(h160);
+                        if (res && res.found) {
+                            found.push({type, addr, h160, serverFound: null});
+                            log('HIT ' + type + ' [' + pi + '/' + n + '] ' + addr, 'ok');
+                        }
+                    }
+                }
+                // Server check all found (phase 1 already checked, re-verify together)
                 try {
-                    const t0s  = performance.now();
+                    const t0s = performance.now();
                     const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.h160); })) });
                     const buf  = new Uint32Array(await resp.arrayBuffer());
-                    const msS  = (performance.now() - t0s).toFixed(1);
                     serverFilterLabel = '2G';
                     for (let i = 0; i < found.length; i++) {
                         found[i].serverFound = readBit(buf, i) === 1;
                         log('server ' + (found[i].serverFound ? 'CONFIRMED \u2713' : 'not confirmed') + ' ' + found[i].addr,
                             found[i].serverFound ? 'ok' : 'dim');
                     }
-                    log('server checked ' + found.length + ' \xb7 2G \xb7 ' + msS + 'ms', 'dim');
-                } catch(e) {
-                    log('server error: ' + e.message, 'err');
-                }
+                    log('server checked ' + found.length + ' \xb7 2G \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', 'dim');
+                } catch(e) { log('server error: ' + e.message, 'err'); }
                 const confirmed = found.filter(function(f) { return f.serverFound === true; });
                 if (confirmed.length > 0) saveHitToHistory(words, confirmed);
             }
+        } else {
+            // Autospin: phase 1 local hit → check remaining 55, push all to pendingHits
+            for (let n = 5; n < 20; n++) {
+                const child = await childKey(acct0, n, false);
+                const {addr, h160} = pathDefs[0].fn(child.key);
+                checked++;
+                const res = clientLookup(h160);
+                if (res && res.found) found.push({type: pathDefs[0].type, addr, h160, serverFound: null});
+            }
+            for (let pi = 1; pi < pathDefs.length; pi++) {
+                const {path, type, fn} = pathDefs[pi];
+                const acct = await derivePath(seed, path);
+                for (let n = 0; n < 20; n++) {
+                    const child = await childKey(acct, n, false);
+                    const {addr, h160} = fn(child.key);
+                    checked++;
+                    const res = clientLookup(h160);
+                    if (res && res.found) found.push({type, addr, h160, serverFound: null});
+                }
+            }
+            for (let i = 0; i < found.length; i++)
+                pendingHits.push({ words: words, type: found[i].type, addr: found[i].addr, h160: found[i].h160 });
         }
+
+        if (!isAuto) log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 found ' + found.length, found.length ? 'ok' : 'data');
     } else {
         document.getElementById('statusLine').textContent = 'Downloading 32M filter\u2026';
         if (!isAuto) log('no filter loaded \u2014 auto-downloading 32M filter\u2026', 'dim');
@@ -1048,9 +1147,10 @@ async function doSpin(fixedWords) {
     if (!isAuto) document.getElementById('btnCopy').style.display = '';
     btn.disabled = false;
     totalSpins++;
+    totalAddresses += checked;
     updateAutoStats();
     return anyConfirmed;
-}
+} // end _doSpin
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async function() {
