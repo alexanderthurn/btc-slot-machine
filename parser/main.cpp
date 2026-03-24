@@ -33,9 +33,9 @@ void signal_handler(int signal) {
 #undef main
 
 // Global Configurations for Multi-Tier Filters
-const int NUM_FILTERS = 7;
-const int filterSizesMB[] = {32, 64, 128, 256, 512, 1024, 2048};
-const int filterBitsExp[] = {28, 29, 30, 31, 32, 33, 34};
+const int NUM_FILTERS = 3;
+const int filterSizesMB[] = {256, 1024, 16384};
+const int filterBitsExp[] = {31, 33, 37};
 
 typedef std::atomic<uint64_t> ATTab;
 static_assert(
@@ -442,7 +442,7 @@ void cmdParse(int arg_chunk_index, bool debug) {
   if (!fs::exists(filterDir))
     fs::create_directory(filterDir);
 
-  cout << "Allocating ~4 GB for all 7 Master Filters in RAM (Thread-safe "
+  cout << "Allocating ~17 GB for all 3 Master Filters in RAM (Thread-safe "
           "Atomics)...\n";
   for (int idx = 0; idx < NUM_FILTERS; ++idx) {
     uint64_t arraySize = 1ull << (filterBitsExp[idx] - tabS);

@@ -4,7 +4,7 @@
 // Response: 8 raw bytes — uint64 LE bitmask, bit i = lookup[i] matched.
 // No JSON, no GMP, no file_exists. Up to 64 lookups per request.
 
-$fh   = fopen(__DIR__ . '/filter/2048mb.bin', 'rb');
+$fh   = fopen(__DIR__ . '/filter/16384mb.bin', 'rb');
 $body = file_get_contents('php://input');
 $n    = (int)(strlen($body) / 5);
 
