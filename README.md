@@ -46,17 +46,10 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
 The easiest way to run the parser is via Docker. The container is fully signal-aware and will gracefully save progress if stopped.
 
 ```bash
-# 1. Build the image
-docker build -t btc-parser .
-
-# 2. Run the parser
-# Mount your bitcoin blocks directory and the output filter directory
-docker run \
-  -v /absolute/path/to/host/blocks:/app/blocks \
-  -v /absolute/path/to/host/filter:/app/filter \
-  -v /absolute/path/to/host/chunks:/app/chunks \
-  btc-parser
+cd parser && bash docker_run.sh
 ```
+
+This script pulls the latest code, rebuilds the image, and runs the parser with the correct volume mounts (`parser/blocks`, `parser/chunks`, `web/filter`).
 
 ### Aborting & Signals
 The Docker container and C++ process are fully signal-aware. If you need to stop a long-running parse:
@@ -65,8 +58,8 @@ The Docker container and C++ process are fully signal-aware. If you need to stop
 - We use `tini` in the Dockerfile to ensure signals are correctly propagated to the C++ PID.
 
 ## Manual Commands (without Docker)
-If running locally, compile first:
-`g++ -std=c++17 -O3 main.cpp -o main`
+If running locally, compile from the `parser/` directory first:
+`cd parser && g++ -std=c++17 -O3 main.cpp -o main`
 
 1. **`./main download`**  
    Downloads sample `blk*.dat` files to get you started.
@@ -88,9 +81,9 @@ Re-run `./main parse` (or the Docker container) periodically to pick up new bloc
 This makes monthly re-runs safe and efficient with no manual bookkeeping.
 
 ## Troubleshooting
-- **Missing Blocks**: Ensure your `blocks/` directory contains `blk00000.dat`, `blk00001.dat`, etc.
+- **Missing Blocks**: Ensure `parser/blocks/` contains `blk00000.dat`, `blk00001.dat`, etc.
 - **PHP GMP**: Ensure `extension=gmp` is enabled in your `php.ini`.
-- **Permissions**: Ensure the `filter/` and `chunks/` directories are writable by the process.
+- **Permissions**: Ensure `web/filter/` and `parser/chunks/` are writable by the process.
 
 
 ## Test Data

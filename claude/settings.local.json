@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(HOME=/Users/alexanderthurn mv /Users/alexanderthurn/Documents/projects/btc-slot-machine/parser/run.sh /Users/alexanderthurn/Documents/projects/btc-slot-machine/parser/docker_run.sh)"
+    ]
+  }
+}

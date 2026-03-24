@@ -23,7 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-blocks/
-chunks/
-filter/
-main
+parser/blocks/
+parser/chunks/
+web/filter/
+parser/main
