@@ -26,17 +26,21 @@ $tabS = 6;
 $tabM = 63;
 
 $allFilters = [
-    16384 => 37,
-    1024  => 33,
-    256   => 31,
+    ['file' => '16384mb.bin',   'bits' => 37, 'label' => 'all-addresses'],
+    ['file' => '1024mb.bin',    'bits' => 33, 'label' => 'all-addresses'],
+    ['file' => '256mb.bin',     'bits' => 31, 'label' => 'all-addresses'],
+    ['file' => '2048mb_bal.bin','bits' => 34, 'label' => 'balance'],
+    ['file' => '1024mb_bal.bin','bits' => 33, 'label' => 'balance'],
+    ['file' => '256mb_bal.bin', 'bits' => 31, 'label' => 'balance'],
 ];
 
 $results = [];
 
-foreach ($allFilters as $mb => $bits) {
-    $path = __DIR__ . '/filter/' . $mb . 'mb.bin';
+foreach ($allFilters as $entry) {
+    $path = __DIR__ . '/filter/' . $entry['file'];
     if (!file_exists($path)) continue;
 
+    $bits = $entry['bits'];
     $t = microtime(true);
 
     $h_trunc = gmp_intval(gmp_and($hash, gmp_sub(gmp_pow("2", $bits), "1")));
@@ -48,7 +52,7 @@ foreach ($allFilters as $mb => $bits) {
     fclose($f);
 
     if ($chunkData === false || strlen($chunkData) !== 8) {
-        $results[] = ['filter' => $mb . 'mb.bin', 'error' => 'read error'];
+        $results[] = ['filter' => $entry['file'], 'label' => $entry['label'], 'error' => 'read error'];
         continue;
     }
 
@@ -57,7 +61,8 @@ foreach ($allFilters as $mb => $bits) {
     $found  = ($chunk & $bitPos) !== 0;
 
     $results[] = [
-        'filter'  => $mb . 'mb.bin',
+        'filter'  => $entry['file'],
+        'label'   => $entry['label'],
         'found'   => $found,
         'time_ms' => round((microtime(true) - $t) * 1000, 3),
     ];
