@@ -28,12 +28,13 @@ static constexpr THash SNVByte(const TKey &key, THash h) {
 
 static constexpr THash FNV(const TKey &key) {
   THash h = 0;
-  if constexpr (hashFctBits == 32) {
-    h = SNVByte<0x01000193>(key, 0x811C9DC5);
+  // if constexpr (hashFctBits == 32) {
+  //   h = SNVByte<0x01000193>(key, 0x811C9DC5);
+  // }
+
+  if constexpr (hashFctBits == 64) {
+    h = SNVByte<0x00000100000001B3ull>(key, 0xCBF29CE484222325ull);
   }
-  // if constexpr (hashFctBits==64) {
-  //    h = SNVByte<0x00000100000001B3ull>(key, 0xCBF29CE484222325ull);
-  //}
 
   if constexpr (hashFctBits > hashTabBitsExp) {
     h = (h ^ (h >> (hashFctBits - hashTabBitsExp))) &
