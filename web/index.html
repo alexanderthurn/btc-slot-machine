@@ -73,6 +73,19 @@
         #btnSpin:hover { background: #e8e8e8; }
         #btnSpin:disabled { opacity: .5; cursor: not-allowed; }
 
+        #btnCopy {
+            padding: 5px 10px;
+            border: 1px solid #ccc;
+            background: #fafafa;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: monospace;
+            display: none;
+            white-space: nowrap;
+        }
+        #btnCopy:hover { background: #f0f0f0; }
+        #btnCopy.copied { border-color: #2a9a2a; color: #1a7a1a; }
+
         #statusLine {
             font-family: monospace;
             font-size: 11px;
@@ -92,7 +105,8 @@
             margin-bottom: 8px;
             min-height: 32px;
         }
-        #resultsBox.found-some { border-color: #2a9a2a; background: #f2fff2; }
+        #resultsBox.found-confirmed   { border-color: #2a9a2a; background: #f2fff2; }
+        #resultsBox.found-unconfirmed { border-color: #b8860b; background: #fffbe6; }
         #resultsBox.none { border-color: #bbb; background: #fafafa; }
         .res-summary { font-family: monospace; font-size: 12px; color: #555; margin-bottom: 4px; }
         .res-item {
@@ -105,6 +119,10 @@
         .res-addr  { font-family: monospace; font-size: 11px; color: #1a7a1a; font-weight: 700; flex: 1; min-width: 0; word-break: break-all; }
         .res-link  { font-size: 11px; color: #888; text-decoration: none; flex-shrink: 0; }
         .res-link:hover { color: #333; text-decoration: underline; }
+        .res-server { font-size: 10px; font-family: monospace; white-space: nowrap; }
+        .res-server.confirmed { color: #1a7a1a; }
+        .res-server.unconfirmed { color: #b8860b; }
+        .res-server.error { color: #c33; }
 
         /* filter */
         .filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -140,6 +158,28 @@
         .l-spd  { color: #335599; }
 
         .sec-lbl { font-size: 12px; color: #666; margin-bottom: 4px; }
+
+        /* hits history */
+        .hits-section { margin-top: 12px; }
+        .hits-hdr { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .hits-lbl { font-size: 12px; color: #666; }
+        .hits-clr { font-size: 11px; color: #888; cursor: pointer; background: none; border: none; padding: 0; text-decoration: underline; }
+        .hits-entry {
+            border: 1px solid #c8e8c8;
+            background: #f6fff6;
+            padding: 6px 8px;
+            margin-bottom: 5px;
+            font-family: monospace;
+            font-size: 11px;
+        }
+        .hits-entry-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3px; }
+        .hits-entry-ts { font-size: 10px; color: #bbb; }
+        .hits-entry-words { color: #555; word-break: break-word; margin-bottom: 4px; }
+        .hits-entry-words a { color: #888; text-decoration: none; }
+        .hits-entry-words a:hover { text-decoration: underline; }
+        .hits-entry-addr { color: #1a7a1a; font-weight: 700; }
+        .hits-entry-addr a { color: #888; text-decoration: none; margin-left: 6px; font-weight: 400; }
+        .hits-entry-addr a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -156,6 +196,7 @@
 
 <div class="spin-row">
     <button id="btnSpin" onclick="doSpin()">SPIN</button>
+    <button id="btnCopy" onclick="copyWords()">copy</button>
     <span id="statusLine">Press SPIN to generate a mnemonic and check addresses.</span>
 </div>
 
@@ -194,6 +235,15 @@
     <button class="log-clr" onclick="clearLog()">clear</button>
 </div>
 <div class="log-box" id="logConsole"></div>
+
+<div class="hits-section" id="hitsSection" style="display:none">
+    <hr>
+    <div class="hits-hdr">
+        <span class="hits-lbl">Recent Hits</span>
+        <button class="hits-clr" onclick="clearHits()">clear</button>
+    </div>
+    <div id="hitsList"></div>
+</div>
 
 <script>
 'use strict';
@@ -503,6 +553,112 @@ function addrP2PKH(privKey)      { const h=hash160(privToPub(privKey)); return {
 function addrP2WPKH(privKey)     { const h=hash160(privToPub(privKey)); return {addr:bech32P2wpkh(h), h160:bytesToHex(h)}; }
 function addrP2SHP2WPKH(privKey) { const h=hash160(privToPub(privKey)); const rs=new Uint8Array([0x00,0x14].concat(Array.from(h))); const sh=hash160(rs); return {addr:base58Check([0x05].concat(Array.from(sh))), h160:bytesToHex(h)}; }
 
+// ── URL ENCODING ──────────────────────────────────────────────────────────────
+// 12 words × 11 bits = 132 bits = 17 bytes → ~23 chars base64url
+function wordsToUrlParam(words) {
+    const bytes = new Uint8Array(17);
+    let bitPos = 0;
+    for (let wi = 0; wi < words.length; wi++) {
+        const idx = BIP39_WORDLIST.indexOf(words[wi]);
+        for (let b = 10; b >= 0; b--) {
+            if ((idx >> b) & 1) {
+                bytes[Math.floor(bitPos / 8)] |= (1 << (7 - (bitPos % 8)));
+            }
+            bitPos++;
+        }
+    }
+    return btoa(String.fromCharCode.apply(null, bytes))
+        .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+}
+
+function urlParamToWords(param) {
+    const b64 = param.replace(/-/g,'+').replace(/_/g,'/');
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const words = [];
+    let bitPos = 0;
+    for (let wi = 0; wi < 12; wi++) {
+        let idx = 0;
+        for (let b = 10; b >= 0; b--) {
+            if ((bytes[Math.floor(bitPos / 8)] >> (7 - (bitPos % 8))) & 1) idx |= (1 << b);
+            bitPos++;
+        }
+        const word = BIP39_WORDLIST[idx];
+        if (!word) return null;
+        words.push(word);
+    }
+    return words;
+}
+
+// ── COPY WORDS ────────────────────────────────────────────────────────────────
+let currentWords = null;
+
+function copyWords() {
+    if (!currentWords) return;
+    navigator.clipboard.writeText(currentWords.join(' ')).then(function() {
+        const btn = document.getElementById('btnCopy');
+        btn.textContent = 'copied!';
+        btn.classList.add('copied');
+        setTimeout(function() { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1500);
+    }).catch(function() {
+        prompt('Copy:', currentWords.join(' '));
+    });
+}
+
+// ── HITS HISTORY ──────────────────────────────────────────────────────────────
+const HITS_KEY = 'btc_hits_history';
+const MAX_HITS = 50;
+
+function saveHitToHistory(words, found) {
+    const hist = JSON.parse(localStorage.getItem(HITS_KEY) || '[]');
+    hist.unshift({
+        ts: Date.now(),
+        words: words,
+        found: found.map(function(f) { return { type: f.type, addr: f.addr, serverFound: f.serverFound }; })
+    });
+    if (hist.length > MAX_HITS) hist.splice(MAX_HITS);
+    localStorage.setItem(HITS_KEY, JSON.stringify(hist));
+    renderHitsHistory();
+}
+
+function clearHits() {
+    localStorage.removeItem(HITS_KEY);
+    renderHitsHistory();
+}
+
+function renderHitsHistory() {
+    const hist = JSON.parse(localStorage.getItem(HITS_KEY) || '[]');
+    const section = document.getElementById('hitsSection');
+    const list = document.getElementById('hitsList');
+    if (!hist.length) { section.style.display = 'none'; return; }
+    section.style.display = '';
+    list.innerHTML = '';
+    hist.forEach(function(entry) {
+        const div = document.createElement('div');
+        div.className = 'hits-entry';
+        const urlParam = wordsToUrlParam(entry.words);
+        const ts = new Date(entry.ts).toLocaleString();
+        let addrHtml = '';
+        entry.found.forEach(function(f) {
+            const srv = f.serverFound === true ? ' <span style="color:#1a7a1a">\u2713srv</span>'
+                      : f.serverFound === false ? ' <span style="color:#888">?srv</span>' : '';
+            addrHtml += '<div class="hits-entry-addr">'
+                + esc(f.type) + ' ' + esc(f.addr) + srv
+                + ' <a href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank">mempool&#8599;</a>'
+                + '</div>';
+        });
+        div.innerHTML = '<div class="hits-entry-top">'
+            + '<span class="hits-entry-words">'
+            + '<a href="?m=' + encodeURIComponent(urlParam) + '" title="Load this mnemonic">' + esc(entry.words.join(' ')) + '</a>'
+            + '</span>'
+            + '<span class="hits-entry-ts">' + esc(ts) + '</span>'
+            + '</div>'
+            + addrHtml;
+        list.appendChild(div);
+    });
+}
+
 // ── SLOT GRID INIT ────────────────────────────────────────────────────────────
 function buildGrid() {
     const grid = document.getElementById('slotGrid');
@@ -525,28 +681,34 @@ function setSlotWord(idx, word) {
 }
 
 // ── SPIN ──────────────────────────────────────────────────────────────────────
-async function doSpin() {
+async function doSpin(fixedWords) {
     const btn = document.getElementById('btnSpin');
     btn.disabled = true;
+    document.getElementById('logConsole').innerHTML = '';
     document.getElementById('resultsBox').style.display = 'none';
+    document.getElementById('btnCopy').style.display = 'none';
 
-    // 1. Generate mnemonic
-    const words = generateMnemonic();
+    // 1. Generate (or restore) mnemonic
+    const words = fixedWords || generateMnemonic();
+    currentWords = words;
 
-    // 2. Display in slots with animation
+    // 2. Update URL
+    history.replaceState(null, '', '?m=' + wordsToUrlParam(words));
+
+    // 3. Display in slots with animation
     for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
 
     const mnemonicStr = words.join(' ');
     document.getElementById('statusLine').textContent = mnemonicStr;
     log('mnemonic: ' + mnemonicStr, 'hi');
 
-    // 3. Derive seed (PBKDF2-HMAC-SHA512, 2048 iterations)
+    // 4. Derive seed (PBKDF2-HMAC-SHA512, 2048 iterations)
     log('deriving seed\u2026', 'dim');
     const t0 = performance.now();
     const seed = await mnemonicToSeed(words);
     log('seed derived in ' + ((performance.now()-t0)/1000).toFixed(2) + 's', 'dim');
 
-    // 4. Derive addresses for 3 paths x 20 indices = 60 total
+    // 5. Derive addresses for 3 paths x 20 indices = 60 total
     const pathDefs = [
         { path: "m/44'/0'/0'/0", type: 'P2PKH',       fn: addrP2PKH },
         { path: "m/49'/0'/0'/0", type: 'P2SH-P2WPKH', fn: addrP2SHP2WPKH },
@@ -558,7 +720,6 @@ async function doSpin() {
     const tAddr = performance.now();
 
     if (cf.view) {
-        // Filter loaded: check all 60 addresses
         log('checking 60 addresses via ' + cf.sizeMB + 'MB filter\u2026', 'dim');
         for (let pi = 0; pi < pathDefs.length; pi++) {
             const {path, type, fn} = pathDefs[pi];
@@ -569,50 +730,54 @@ async function doSpin() {
                 const res = clientLookup(h160);
                 checked++;
                 if (res && res.found) {
-                    found.push({type, addr, h160});
+                    found.push({type, addr, h160, serverFound: null});
                     log('HIT ' + type + ' [' + path + '/' + n + '] ' + addr, 'ok');
                 }
             }
         }
         log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 found ' + found.length, found.length ? 'ok' : 'data');
-    } else {
-        // No filter: server fallback for first 3 addresses (one per path)
-        log('no filter \u2014 checking 3 addresses via server\u2026', 'dim');
-        for (let pi = 0; pi < pathDefs.length; pi++) {
-            const {path, type, fn} = pathDefs[pi];
-            const account = await derivePath(seed, path);
-            const child = await childKey(account, 0, false);
-            const {addr, h160} = fn(child.key);
-            checked++;
-            try {
-                const resp = await fetch('index.php?address_hex=' + h160 + '&_cb=' + Date.now());
-                const data = await resp.json();
-                if (data.found) {
-                    found.push({type, addr, h160});
-                    log('server HIT ' + type + ' ' + addr, 'ok');
-                } else {
-                    log('server miss ' + type + ' ' + addr, 'dim');
+
+        // 6. Server verify — only on filter hits
+        if (found.length > 0) {
+            log('verifying ' + found.length + ' hit(s) via server\u2026', 'dim');
+            for (let i = 0; i < found.length; i++) {
+                try {
+                    const resp = await fetch('index.php?address_hex=' + found[i].h160 + '&_cb=' + Date.now());
+                    const data = await resp.json();
+                    found[i].serverFound = data.found;
+                    log('server ' + (data.found ? 'CONFIRMED \u2713' : 'not confirmed') + ' ' + found[i].addr, data.found ? 'ok' : 'dim');
+                } catch(e) {
+                    found[i].serverFound = null;
+                    log('server error: ' + e.message, 'err');
                 }
-            } catch(e) {
-                log('server error ' + type + ': ' + e.message, 'err');
             }
+            saveHitToHistory(words, found);
         }
-        log('checked ' + checked + ' via server \xb7 found ' + found.length, found.length ? 'ok' : 'data');
+    } else {
+        log('no filter loaded \u2014 load a filter above to check addresses', 'dim');
+        checked = 0;
     }
 
     log('address derivation: ' + ((performance.now()-tAddr)/1000).toFixed(2) + 's', 'dim');
 
-    // 5. Show results
+    // 7. Show results
     const box = document.getElementById('resultsBox');
     box.style.display = '';
-    box.className = found.length ? 'found-some' : 'none';
+    const anyConfirmed = found.some(function(f) { return f.serverFound === true; });
+    box.className = found.length === 0 ? 'none' : anyConfirmed ? 'found-confirmed' : 'found-unconfirmed';
 
     let html = '<div class="res-summary">Checked ' + checked + ' &middot; Found: ' + found.length + '</div>';
     for (let i = 0; i < found.length; i++) {
-        const {type, addr} = found[i];
+        const {type, addr, serverFound} = found[i];
+        const srvHtml = serverFound === true
+            ? '<span class="res-server confirmed">\u2713 server confirmed</span>'
+            : serverFound === false
+            ? '<span class="res-server unconfirmed">server: not found</span>'
+            : '';
         html += '<div class="res-item">'
             + '<span class="res-type">' + esc(type) + '</span>'
             + '<span class="res-addr">' + esc(addr) + '</span>'
+            + srvHtml
             + '<a class="res-link" href="https://mempool.space/address/' + encodeURIComponent(addr) + '" target="_blank">mempool&#8599;</a>'
             + '</div>';
     }
@@ -621,6 +786,7 @@ async function doSpin() {
     document.getElementById('statusLine').textContent =
         'Checked ' + checked + ' \xb7 Found: ' + found.length + (found.length ? ' \u2014 see results below' : '');
 
+    document.getElementById('btnCopy').style.display = '';
     btn.disabled = false;
 }
 
@@ -628,6 +794,24 @@ async function doSpin() {
 window.addEventListener('DOMContentLoaded', async function() {
     buildGrid();
     await refreshIDBState();
+    renderHitsHistory();
+
+    // Restore mnemonic from URL if present
+    const urlParam = new URLSearchParams(window.location.search).get('m');
+    if (urlParam) {
+        try {
+            const words = urlParamToWords(urlParam);
+            if (words) {
+                currentWords = words;
+                for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
+                document.getElementById('btnCopy').style.display = '';
+                document.getElementById('statusLine').textContent = words.join(' ');
+                log('mnemonic loaded from URL', 'dim');
+            }
+        } catch(e) {
+            log('could not decode URL mnemonic', 'err');
+        }
+    }
 
     const lastMB = parseInt(localStorage.getItem('btc_active_filter') || '0');
     if (lastMB) {
