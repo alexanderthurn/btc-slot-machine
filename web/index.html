@@ -119,6 +119,8 @@
         .res-addr  { font-family: monospace; font-size: 11px; color: #1a7a1a; font-weight: 700; flex: 1; min-width: 0; word-break: break-all; }
         .res-link  { font-size: 11px; color: #888; text-decoration: none; flex-shrink: 0; }
         .res-link:hover { color: #333; text-decoration: underline; }
+        .res-toggle { font-size: 11px; color: #888; cursor: pointer; font-family: monospace; }
+        .res-toggle:hover { color: #333; text-decoration: underline; }
         .res-server { font-size: 10px; font-family: monospace; white-space: nowrap; }
         .res-server.confirmed { color: #1a7a1a; }
         .res-server.unconfirmed { color: #b8860b; }
@@ -159,6 +161,24 @@
 
         .sec-lbl { font-size: 12px; color: #666; margin-bottom: 4px; }
 
+        /* autospin */
+        .auto-label { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #444; cursor: pointer; white-space: nowrap; user-select: none; }
+        .auto-label input { cursor: pointer; }
+        #autoStatsRow { font-family: monospace; font-size: 11px; color: #666; margin-bottom: 6px; display: none; }
+        #autoStats .stat-sep { color: #ccc; margin: 0 4px; }
+        #autoStats .stat-match { color: #1a7a1a; }
+
+        /* no-filter warning */
+        #noFilterBanner {
+            font-size: 12px;
+            font-family: monospace;
+            border: 1px solid #b8860b;
+            background: #fffbe6;
+            color: #7a5800;
+            padding: 6px 8px;
+            margin-bottom: 8px;
+        }
+
         /* hits history */
         .hits-section { margin-top: 12px; }
         .hits-hdr { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
@@ -196,10 +216,13 @@
 
 <div class="spin-row">
     <button id="btnSpin" onclick="doSpin()">SPIN</button>
+    <label class="auto-label"><input type="checkbox" id="chkAuto" onchange="onAutoChange()"> auto</label>
     <button id="btnCopy" onclick="copyWords()">copy</button>
-    <span id="statusLine">Press SPIN to generate a mnemonic and check addresses.</span>
+    <span id="statusLine">No filter loaded — load one below or spin to auto-download the 32M filter.</span>
 </div>
+<div id="autoStatsRow"><span id="autoStats"></span></div>
 
+<div id="noFilterBanner">No filter loaded. Spinning will auto-download the 32M filter (~32 MB). Load a larger one below for better accuracy.</div>
 <div id="resultsBox" style="display:none"></div>
 
 <hr>
@@ -388,6 +411,7 @@ function activateFilter(sizeMB, bitsExp, buffer) {
     const activeBtn = document.querySelector('.cf-btn[data-mb="' + sizeMB + '"]');
     if (activeBtn) activeBtn.classList.add('loaded');
     localStorage.setItem('btc_active_filter', sizeMB);
+    document.getElementById('noFilterBanner').style.display = 'none';
 }
 
 function deactivateFilter() {
@@ -395,6 +419,7 @@ function deactivateFilter() {
     cf.buffer = cf.view = cf.sizeMB = cf.bitsExp = null;
     refreshIDBState();
     localStorage.removeItem('btc_active_filter');
+    document.getElementById('noFilterBanner').style.display = '';
     if (mb) log(mb + 'MB deactivated', 'dim');
 }
 
@@ -686,11 +711,62 @@ function setSlotWord(idx, word) {
     slot.querySelector('.slot-word').textContent = word;
 }
 
+// ── AUTOSPIN ──────────────────────────────────────────────────────────────────
+let autoSpinning     = false;
+let totalSpins       = 0;
+let spinsAtLastMatch = 0;
+let lastMatchTime    = null;
+const pageStartTime  = Date.now();
+
+function updateAutoStats() {
+    const now     = Date.now();
+    const elapsed = (now - pageStartTime) / 1000;
+    const spsAll  = elapsed > 0 ? (totalSpins / elapsed).toFixed(2) : '0.00';
+
+    let html = totalSpins.toLocaleString() + ' spins'
+        + '<span class="stat-sep">·</span>' + spsAll + '/s overall';
+
+    if (lastMatchTime !== null) {
+        const sinceMatchSec   = (now - lastMatchTime) / 1000;
+        const sinceMatchSpins = totalSpins - spinsAtLastMatch;
+        const spsMatch        = sinceMatchSec > 0 ? (sinceMatchSpins / sinceMatchSec).toFixed(2) : '0.00';
+        html += '<span class="stat-sep"> · </span>'
+            + '<span class="stat-match">since last match: '
+            + sinceMatchSpins.toLocaleString() + ' spins'
+            + '<span class="stat-sep"> · </span>' + spsMatch + '/s'
+            + '</span>';
+    }
+
+    document.getElementById('autoStats').innerHTML = html;
+    document.getElementById('autoStatsRow').style.display = 'block';
+}
+
+function setAutoSpin(val) {
+    autoSpinning = val;
+    document.getElementById('chkAuto').checked = val;
+}
+
+async function onAutoChange() {
+    if (!document.getElementById('chkAuto').checked) {
+        autoSpinning = false;
+        return;
+    }
+    autoSpinning = true;
+    while (autoSpinning) {
+        const confirmed = await doSpin();
+        if (confirmed) {
+            spinsAtLastMatch = totalSpins;
+            lastMatchTime    = Date.now();
+            updateAutoStats();
+        }
+    }
+}
+
 // ── SPIN ──────────────────────────────────────────────────────────────────────
 async function doSpin(fixedWords) {
     const btn = document.getElementById('btnSpin');
     btn.disabled = true;
-    document.getElementById('logConsole').innerHTML = '';
+    if (!autoSpinning) document.getElementById('logConsole').innerHTML = '';
     document.getElementById('resultsBox').style.display = 'none';
     document.getElementById('btnCopy').style.display = 'none';
 
@@ -769,7 +845,14 @@ async function doSpin(fixedWords) {
             if (confirmed.length > 0) saveHitToHistory(words, confirmed);
         }
     } else {
-        log('no filter loaded \u2014 load a filter above to check addresses', 'dim');
+        log('no filter loaded \u2014 auto-downloading 32M filter\u2026', 'dim');
+        document.getElementById('statusLine').textContent = 'Downloading 32M filter\u2026';
+        await filterClick(32, 28);
+        if (cf.view) {
+            log('filter ready \u2014 re-checking\u2026', 'dim');
+            btn.disabled = false;
+            return await doSpin(words);
+        }
         checked = 0;
     }
 
@@ -790,21 +873,37 @@ async function doSpin(fixedWords) {
     } else {
         summary += ' &middot; Found: 0';
     }
-    let html = '<div class="res-summary">' + summary + '</div>';
-    for (let i = 0; i < found.length; i++) {
-        const {type, addr, serverFound} = found[i];
-        const srvHtml = serverFound === true
+    function resItemHtml(f) {
+        const srvHtml = f.serverFound === true
             ? '<span class="res-server confirmed">\u2713 server confirmed</span>'
-            : serverFound === false
+            : f.serverFound === false
             ? '<span class="res-server unconfirmed">server: not found</span>'
             : '';
-        html += '<div class="res-item">'
-            + '<span class="res-type">' + esc(type) + '</span>'
-            + '<span class="res-addr">' + esc(addr) + '</span>'
+        return '<div class="res-item">'
+            + '<span class="res-type">' + esc(f.type) + '</span>'
+            + '<span class="res-addr">' + esc(f.addr) + '</span>'
             + srvHtml
-            + '<a class="res-link" href="https://mempool.space/address/' + encodeURIComponent(addr) + '" target="_blank">mempool&#8599;</a>'
+            + '<a class="res-link" href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank">mempool&#8599;</a>'
             + '</div>';
     }
+
+    const confirmed = found.filter(function(f) { return f.serverFound === true; });
+    const localOnly = found.filter(function(f) { return f.serverFound !== true; });
+
+    let html = '<div class="res-summary">' + summary + '</div>';
+    for (let i = 0; i < confirmed.length; i++) html += resItemHtml(confirmed[i]);
+
+    if (localOnly.length > 0) {
+        const localId = 'localMatches_' + Date.now();
+        html += '<div style="margin-top:4px">'
+            + '<span class="res-toggle" onclick="var el=document.getElementById(\'' + localId + '\');var t=document.getElementById(\'' + localId + '_t\');if(el.style.display===\'none\'){el.style.display=\'\';t.textContent=\'Hide local matches\';}else{el.style.display=\'none\';t.textContent=\'Show ' + localOnly.length + ' local-only match' + (localOnly.length > 1 ? 'es' : '') + '\';}"> '
+            + '<span id="' + localId + '_t">Show ' + localOnly.length + ' local-only match' + (localOnly.length > 1 ? 'es' : '') + '</span>'
+            + '</span></div>';
+        html += '<div id="' + localId + '" style="display:none">';
+        for (let i = 0; i < localOnly.length; i++) html += resItemHtml(localOnly[i]);
+        html += '</div>';
+    }
+
     box.innerHTML = html;
 
     document.getElementById('statusLine').textContent =
@@ -812,6 +911,9 @@ async function doSpin(fixedWords) {
 
     document.getElementById('btnCopy').style.display = '';
     btn.disabled = false;
+    totalSpins++;
+    updateAutoStats();
+    return anyConfirmed;
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
@@ -844,10 +946,10 @@ window.addEventListener('DOMContentLoaded', async function() {
             activateFilter(cached.sizeMB, cached.bitsExp, cached.buffer);
             log('restored ' + cached.sizeMB + 'MB filter from IndexedDB', 'ok');
         } else {
-            log('ready', 'dim');
+            log('ready \u2014 no filter loaded', 'dim');
         }
     } else {
-        log('ready', 'dim');
+        log('ready \u2014 no filter loaded', 'dim');
     }
 });
 </script>
