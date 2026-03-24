@@ -308,6 +308,14 @@ function fnv1a(hex20) {
     return h;
 }
 
+// Compute server-side bloom filter position for 2G filter (bitsExp=34).
+// Returns [row, col] — PHP can fseek(row*8) and check bit col without any GMP.
+const SERVER_MASK = (1n << 34n) - 1n;
+function serverPos(hex20) {
+    const trunc = fnv1a(hex20) & SERVER_MASK;
+    return [Number(trunc >> 6n), Number(trunc & 63n)];
+}
+
 // ── INDEXEDDB CACHE ───────────────────────────────────────────────────────────
 function openDB() {
     return new Promise(function(res, rej) {
@@ -718,6 +726,73 @@ let spinsAtLastMatch = 0;
 let lastMatchTime    = null;
 const pageStartTime  = Date.now();
 
+// Pending local hits waiting for a batched server check
+const FLUSH_INTERVAL_MS = 1000;
+const FLUSH_BATCH_SIZE  = 20;
+let pendingHits  = []; // { words, type, addr, h160 }
+let lastFlushTime = Date.now();
+
+async function flushPendingHits() {
+    if (pendingHits.length === 0) return;
+    const batch = pendingHits.splice(0);
+    lastFlushTime = Date.now();
+
+    // Deduplicate by h160, compute server bloom positions (client-side, no PHP GMP needed)
+    const uniqueH160s = [];
+    const seenH160 = {};
+    for (let i = 0; i < batch.length; i++) {
+        const h = batch[i].h160;
+        if (!seenH160[h]) { seenH160[h] = true; uniqueH160s.push(h); }
+    }
+    const lookups = uniqueH160s.map(serverPos); // [[row,col], ...]
+
+    log('batch: checking ' + uniqueH160s.length + ' addr from ' + batch.length + ' local hits\u2026', 'dim');
+    try {
+        const t0   = performance.now();
+        const resp = await fetch('index.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lookups: lookups })
+        });
+        // Response is 8 raw bytes: uint64 LE bitmask, bit i = lookup[i] matched
+        const buf  = new Uint32Array(await resp.arrayBuffer()); // [lo, hi]
+        const ms   = (performance.now() - t0).toFixed(1);
+
+        function hitBit(i) { return i < 32 ? (buf[0] >> i) & 1 : (buf[1] >> (i - 32)) & 1; }
+
+        // Build h160 → bool map from positional bitmask
+        const h160Result = {};
+        for (let i = 0; i < uniqueH160s.length; i++) h160Result[uniqueH160s[i]] = hitBit(i) === 1;
+
+        // Group confirmed items by mnemonic
+        const byMnemonic = {};
+        for (let i = 0; i < batch.length; i++) {
+            const item = batch[i];
+            if (h160Result[item.h160] === true) {
+                const key = item.words.join(' ');
+                if (!byMnemonic[key]) byMnemonic[key] = { words: item.words, found: [] };
+                byMnemonic[key].found.push({ type: item.type, addr: item.addr, serverFound: true });
+            }
+        }
+
+        const groups = Object.values(byMnemonic);
+        if (groups.length > 0) {
+            log('\u2713 SERVER CONFIRMED ' + groups.length + ' mnemonic(s) \xb7 ' + ms + 'ms', 'ok');
+            for (let i = 0; i < groups.length; i++) {
+                log('  ' + groups[i].words.join(' '), 'ok');
+                saveHitToHistory(groups[i].words, groups[i].found);
+                spinsAtLastMatch = totalSpins;
+                lastMatchTime = Date.now();
+                updateAutoStats();
+            }
+        } else {
+            log('batch: ' + uniqueH160s.length + ' checked \xb7 ' + ms + 'ms \xb7 no hits', 'dim');
+        }
+    } catch(e) {
+        log('batch server error: ' + e.message, 'err');
+    }
+}
+
 function updateAutoStats() {
     const now     = Date.now();
     const elapsed = (now - pageStartTime) / 1000;
@@ -749,24 +824,29 @@ function setAutoSpin(val) {
 async function onAutoChange() {
     if (!document.getElementById('chkAuto').checked) {
         autoSpinning = false;
+        await flushPendingHits();
         return;
     }
     autoSpinning = true;
+    lastFlushTime = Date.now();
     while (autoSpinning) {
-        const confirmed = await doSpin();
-        if (confirmed) {
-            spinsAtLastMatch = totalSpins;
-            lastMatchTime    = Date.now();
-            updateAutoStats();
+        await doSpin();
+        if (pendingHits.length >= FLUSH_BATCH_SIZE ||
+            (pendingHits.length > 0 && Date.now() - lastFlushTime >= FLUSH_INTERVAL_MS)) {
+            flushPendingHits(); // fire-and-forget — don't block spinning on HTTP round trip
         }
     }
+    await flushPendingHits();
+    document.getElementById('resultsBox').style.display = 'block';
+    document.getElementById('btnCopy').style.display = '';
 }
 
 // ── SPIN ──────────────────────────────────────────────────────────────────────
 async function doSpin(fixedWords) {
+    const isAuto = autoSpinning; // capture now — consistent for the whole spin
     const btn = document.getElementById('btnSpin');
     btn.disabled = true;
-    if (!autoSpinning) document.getElementById('logConsole').innerHTML = '';
+    if (!isAuto) document.getElementById('logConsole').innerHTML = '';
     document.getElementById('resultsBox').style.display = 'none';
     document.getElementById('btnCopy').style.display = 'none';
 
@@ -774,21 +854,19 @@ async function doSpin(fixedWords) {
     const words = fixedWords || generateMnemonic();
     currentWords = words;
 
-    // 2. Update URL
-    history.replaceState(null, '', '?m=' + wordsToUrlParam(words));
+    // 2. Update URL (skip during autospin — replaceState triggers favicon re-fetch every spin)
+    if (!isAuto) history.replaceState(null, '', '?m=' + wordsToUrlParam(words));
 
     // 3. Display in slots with animation
     for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
 
-    const mnemonicStr = words.join(' ');
-    document.getElementById('statusLine').textContent = mnemonicStr;
-    log('mnemonic: ' + mnemonicStr, 'hi');
+    document.getElementById('statusLine').textContent = words.join(' ');
+    if (!isAuto) log('mnemonic: ' + words.join(' '), 'hi');
 
     // 4. Derive seed (PBKDF2-HMAC-SHA512, 2048 iterations)
-    log('deriving seed\u2026', 'dim');
     const t0 = performance.now();
     const seed = await mnemonicToSeed(words);
-    log('seed derived in ' + ((performance.now()-t0)/1000).toFixed(2) + 's', 'dim');
+    if (!isAuto) log('seed derived in ' + ((performance.now()-t0)/1000).toFixed(2) + 's', 'dim');
 
     // 5. Derive addresses for 3 paths x 20 indices = 60 total
     const pathDefs = [
@@ -802,7 +880,6 @@ async function doSpin(fixedWords) {
     const tAddr = performance.now();
 
     if (cf.view) {
-        log('checking 60 addresses via ' + cf.sizeMB + 'MB filter\u2026', 'dim');
         for (let pi = 0; pi < pathDefs.length; pi++) {
             const {path, type, fn} = pathDefs[pi];
             const account = await derivePath(seed, path);
@@ -813,54 +890,59 @@ async function doSpin(fixedWords) {
                 checked++;
                 if (res && res.found) {
                     found.push({type, addr, h160, serverFound: null});
-                    log('HIT ' + type + ' [' + path + '/' + n + '] ' + addr, 'ok');
+                    if (!isAuto) log('HIT ' + type + ' [' + path + '/' + n + '] ' + addr, 'ok');
                 }
             }
         }
-        log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 found ' + found.length, found.length ? 'ok' : 'data');
+        if (!isAuto) log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 found ' + found.length, found.length ? 'ok' : 'data');
 
-        // 6. Server verify — only on filter hits, one batch request
+        // 6. Server verify — batched during autospin, inline during manual
         if (found.length > 0) {
-            log('verifying ' + found.length + ' hit(s) via server\u2026', 'dim');
-            try {
-                const resp = await fetch('index.php', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ addresses: found.map(function(f) { return f.h160; }) })
-                });
-                const data = await resp.json();
-                if (data.results) {
-                    serverFilterLabel = fmtFilterName(data.filter_used);
+            if (isAuto) {
+                for (let i = 0; i < found.length; i++)
+                    pendingHits.push({ words: words, type: found[i].type, addr: found[i].addr, h160: found[i].h160 });
+            } else {
+                log('verifying ' + found.length + ' hit(s) via server\u2026', 'dim');
+                try {
+                    const t0s  = performance.now();
+                    const resp = await fetch('index.php', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ lookups: found.map(function(f) { return serverPos(f.h160); }) })
+                    });
+                    const buf = new Uint32Array(await resp.arrayBuffer());
+                    const msS = (performance.now() - t0s).toFixed(1);
+                    serverFilterLabel = '2G';
                     for (let i = 0; i < found.length; i++) {
-                        found[i].serverFound = data.results[found[i].h160] === true;
+                        found[i].serverFound = ((i < 32 ? (buf[0] >> i) : (buf[1] >> (i-32))) & 1) === 1;
                         log('server ' + (found[i].serverFound ? 'CONFIRMED \u2713' : 'not confirmed') + ' ' + found[i].addr,
                             found[i].serverFound ? 'ok' : 'dim');
                     }
-                    log('server checked ' + found.length + ' \xb7 ' + data.filter_used + ' \xb7 ' + data.time_php_ms + 'ms', 'dim');
+                    log('server checked ' + found.length + ' \xb7 2G \xb7 ' + msS + 'ms', 'dim');
+                } catch(e) {
+                    log('server error: ' + e.message, 'err');
                 }
-            } catch(e) {
-                log('server error: ' + e.message, 'err');
+                const confirmed = found.filter(function(f) { return f.serverFound === true; });
+                if (confirmed.length > 0) saveHitToHistory(words, confirmed);
             }
-            const confirmed = found.filter(function(f) { return f.serverFound === true; });
-            if (confirmed.length > 0) saveHitToHistory(words, confirmed);
         }
     } else {
-        log('no filter loaded \u2014 auto-downloading 32M filter\u2026', 'dim');
         document.getElementById('statusLine').textContent = 'Downloading 32M filter\u2026';
+        if (!isAuto) log('no filter loaded \u2014 auto-downloading 32M filter\u2026', 'dim');
         await filterClick(32, 28);
         if (cf.view) {
-            log('filter ready \u2014 re-checking\u2026', 'dim');
+            if (!isAuto) log('filter ready \u2014 re-checking\u2026', 'dim');
             btn.disabled = false;
             return await doSpin(words);
         }
         checked = 0;
     }
 
-    log('address derivation: ' + ((performance.now()-tAddr)/1000).toFixed(2) + 's', 'dim');
+    if (!isAuto) log('address derivation: ' + ((performance.now()-tAddr)/1000).toFixed(2) + 's', 'dim');
 
     // 7. Show results
     const box = document.getElementById('resultsBox');
-    box.style.display = '';
+    if (!isAuto) box.style.display = 'block';
     const anyConfirmed = found.some(function(f) { return f.serverFound === true; });
     box.className = found.length === 0 ? 'none' : anyConfirmed ? 'found-confirmed' : 'found-unconfirmed';
 
@@ -909,7 +991,7 @@ async function doSpin(fixedWords) {
     document.getElementById('statusLine').textContent =
         'Checked ' + checked + ' \xb7 Found: ' + found.length + (found.length ? ' \u2014 see results below' : '');
 
-    document.getElementById('btnCopy').style.display = '';
+    if (!isAuto) document.getElementById('btnCopy').style.display = '';
     btn.disabled = false;
     totalSpins++;
     updateAutoStats();
