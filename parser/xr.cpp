@@ -6,7 +6,7 @@ using std::cin;
 using std::cout;
 using std::endl;
 
-static constexpr uint64_t keyBytes = 20;
+static constexpr uint64_t keyBytes = 32;
 static constexpr uint64_t hashTabBitsExp = 32;
 using THash = uint64_t; // upgraded to 64-bit to support >512MB
 

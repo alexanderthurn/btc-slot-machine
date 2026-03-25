@@ -6,18 +6,20 @@ $startTime = microtime(true);
 
 $hex = $_GET['address_hex'] ?? '';
 
-if (strlen($hex) !== 40 || !ctype_xdigit($hex)) {
-    die(json_encode(['error' => 'Please provide a valid 40-char Hash160 hex string']));
+if ((!in_array(strlen($hex), [40, 64])) || !ctype_xdigit($hex)) {
+    die(json_encode(['error' => 'Please provide a 40-char Hash160 or 64-char 32-byte hex string']));
 }
 
-$bytes = hex2bin($hex);
+// Zero-pad to 32 bytes (64 hex chars) — Hash160 types get 12 zero bytes appended
+$hex32  = str_pad($hex, 64, '0');
+$bytes  = hex2bin($hex32);
 
-// 64-bit FNV-1a hash (same as index.php)
+// 64-bit FNV-1a hash over 32 bytes (same as C++ with keyBytes=32)
 $hash   = gmp_init("14695981039346656037"); // 0xCBF29CE484222325
 $prime  = gmp_init("1099511628211");         // 0x00000100000001B3
 $mask64 = gmp_init("18446744073709551615");  // 0xFFFFFFFFFFFFFFFF
 
-for ($i = 0; $i < 20; $i++) {
+for ($i = 0; $i < 32; $i++) {
     $hash = gmp_xor($hash, ord($bytes[$i]));
     $hash = gmp_and(gmp_mul($hash, $prime), $mask64);
 }
@@ -26,12 +28,12 @@ $tabS = 6;
 $tabM = 63;
 
 $allFilters = [
-    ['file' => '16384mb.bin',   'bits' => 37, 'label' => 'all-addresses'],
-    ['file' => '1024mb.bin',    'bits' => 33, 'label' => 'all-addresses'],
-    ['file' => '256mb.bin',     'bits' => 31, 'label' => 'all-addresses'],
-    ['file' => '2048mb_bal.bin','bits' => 34, 'label' => 'balance'],
-    ['file' => '1024mb_bal.bin','bits' => 33, 'label' => 'balance'],
-    ['file' => '256mb_bal.bin', 'bits' => 31, 'label' => 'balance'],
+    ['file' => '16384mb.bin',   'bits' => 37, 'label' => 'all-addresses (32-byte key)'],
+    ['file' => '1024mb.bin',    'bits' => 33, 'label' => 'all-addresses (32-byte key)'],
+    ['file' => '256mb.bin',     'bits' => 31, 'label' => 'all-addresses (32-byte key)'],
+    ['file' => '2048mb_bal.bin','bits' => 34, 'label' => 'balance (32-byte key)'],
+    ['file' => '1024mb_bal.bin','bits' => 33, 'label' => 'balance (32-byte key)'],
+    ['file' => '256mb_bal.bin', 'bits' => 31, 'label' => 'balance (32-byte key)'],
 ];
 
 $results = [];

@@ -1,10 +1,8 @@
 <?php
-// btc-slot-machine: minimal bloom filter lookup.
-// Request:  raw binary, 5 bytes per lookup — uint32 LE row + uint8 col.
-// Response: 8 raw bytes — uint64 LE bitmask, bit i = lookup[i] matched.
-// No JSON, no GMP, no file_exists. Up to 64 lookups per request.
+// btc-slot-machine: balance filter lookup (addresses with unspent BTC only).
+// Same binary protocol as index.php — 5 bytes per lookup, 8-byte bitmask response.
 
-$fh   = fopen(__DIR__ . '/filter/16384mb.bin', 'rb');
+$fh   = fopen(__DIR__ . '/filter/2048mb_bal.bin', 'rb');
 if (!$fh) { header('Content-Type: application/octet-stream'); echo pack('VV', 0, 0); exit; }
 $body = file_get_contents('php://input');
 $n    = (int)(strlen($body) / 5);

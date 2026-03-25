@@ -104,6 +104,45 @@ static array<uint8_t,32> dsha256(const uint8_t *data, size_t len) {
   auto h1 = sha256(data, len); return sha256(h1.data(), 32);
 }
 
+// RIPEMD160 (for P2PK Hash160 computation)
+static inline uint32_t rotl32r(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
+static uint32_t rmd_f(uint32_t x,uint32_t y,uint32_t z,int j) {
+  if(j<16)return x^y^z; if(j<32)return(x&y)|(~x&z);
+  if(j<48)return(x|~y)^z; if(j<64)return(x&z)|(y&~z); return x^(y|~z);
+}
+static const uint32_t RMD_K[5] ={0x00000000u,0x5A827999u,0x6ED9EBA1u,0x8F1BBCDCu,0xA953FD4Eu};
+static const uint32_t RMD_KP[5]={0x50A28BE6u,0x5C4DD124u,0x6D703EF3u,0x7A6D76E9u,0x00000000u};
+static const int RMD_R[80] ={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,7,4,13,1,10,6,15,3,12,0,9,5,2,14,11,8,3,10,14,4,9,15,8,1,2,7,0,6,13,11,5,12,1,9,11,10,0,8,12,4,13,3,7,15,14,5,6,2,4,0,5,9,7,12,2,10,14,1,3,8,11,6,15,13};
+static const int RMD_RP[80]={5,14,7,0,9,2,11,4,13,6,15,8,1,10,3,12,6,11,3,7,0,13,5,10,14,15,8,12,4,9,1,2,15,5,1,3,7,14,6,9,11,8,12,2,10,0,4,13,8,6,4,1,3,11,15,0,5,12,2,13,9,7,10,14,12,15,10,4,1,5,8,7,6,2,13,14,0,3,9,11};
+static const int RMD_S[80] ={11,14,15,12,5,8,7,9,11,13,14,15,6,7,9,8,7,6,8,13,11,9,7,15,7,12,15,9,11,7,13,12,11,13,6,7,14,9,13,15,14,8,13,6,5,12,7,5,11,12,14,15,14,15,9,8,9,14,5,6,8,6,5,12,9,15,5,11,6,8,13,12,5,12,13,14,11,8,5,6};
+static const int RMD_SP[80]={8,9,9,11,13,15,15,5,7,7,8,11,14,14,12,6,9,13,15,7,12,8,9,11,7,7,12,7,6,15,13,11,9,7,15,11,8,6,6,14,12,13,5,14,13,13,7,5,15,5,8,11,14,14,6,14,6,9,12,9,12,5,15,8,8,5,12,9,12,5,14,6,8,13,6,5,15,13,11,11};
+static array<uint8_t,20> ripemd160(const uint8_t *data, size_t len) {
+  uint32_t h[5]={0x67452301u,0xEFCDAB89u,0x98BADCFEu,0x10325476u,0xC3D2E1F0u};
+  uint64_t bitLen=(uint64_t)len*8;
+  vector<uint8_t> msg(data,data+len);
+  msg.push_back(0x80);
+  while((msg.size()%64)!=56) msg.push_back(0);
+  for(int i=0;i<8;i++) msg.push_back((uint8_t)(bitLen>>(i*8)));
+  for(size_t i=0;i<msg.size();i+=64){
+    uint32_t X[16];
+    for(int j=0;j<16;j++) X[j]=((uint32_t)msg[i+j*4])|((uint32_t)msg[i+j*4+1]<<8)|((uint32_t)msg[i+j*4+2]<<16)|((uint32_t)msg[i+j*4+3]<<24);
+    uint32_t a=h[0],b=h[1],c=h[2],d=h[3],e=h[4],ap=h[0],bp=h[1],cp=h[2],dp=h[3],ep=h[4];
+    for(int j=0;j<80;j++){
+      uint32_t T=rotl32r(a+rmd_f(b,c,d,j)+X[RMD_R[j]]+RMD_K[j/16],RMD_S[j])+e;
+      a=e;e=d;d=rotl32r(c,10);c=b;b=T;
+      T=rotl32r(ap+rmd_f(bp,cp,dp,79-j)+X[RMD_RP[j]]+RMD_KP[j/16],RMD_SP[j])+ep;
+      ap=ep;ep=dp;dp=rotl32r(cp,10);cp=bp;bp=T;
+    }
+    uint32_t T=h[1]+c+dp;h[1]=h[2]+d+ep;h[2]=h[3]+e+ap;h[3]=h[4]+a+bp;h[4]=h[0]+b+cp;h[0]=T;
+  }
+  array<uint8_t,20> r;
+  for(int i=0;i<5;i++){r[i*4]=(uint8_t)h[i];r[i*4+1]=(uint8_t)(h[i]>>8);r[i*4+2]=(uint8_t)(h[i]>>16);r[i*4+3]=(uint8_t)(h[i]>>24);}
+  return r;
+}
+static array<uint8_t,20> hash160(const uint8_t *data, size_t len) {
+  auto s = sha256(data, len); return ripemd160(s.data(), 32);
+}
+
 // UTXO map types: key = txid (32 bytes) + vout index (4 bytes)
 struct UTXOKey {
   uint8_t data[36];
@@ -313,7 +352,7 @@ void processChunk(int chunk_index, bool debug) {
        << end_file << ".dat)\n";
 
   uint64_t total_payloads_written = 0;
-  uint64_t count_p2pkh = 0, count_p2sh = 0, count_p2wpkh = 0;
+  uint64_t count_p2pkh = 0, count_p2sh = 0, count_p2wpkh = 0, count_p2tr = 0, count_p2wsh = 0, count_p2pk = 0;
 
   std::mutex statsMutex;
   std::atomic<size_t> fileTaskIdx(0);
@@ -335,7 +374,7 @@ void processChunk(int chunk_index, bool debug) {
         if (!file)
           continue;
 
-        uint64_t lTotal = 0, lP2PKH = 0, lP2SH = 0, lP2WPKH = 0;
+        uint64_t lTotal = 0, lP2PKH = 0, lP2SH = 0, lP2WPKH = 0, lP2TR = 0, lP2WSH = 0, lP2PK = 0;
         string filename = fs::path(filepath).filename().string();
         static std::mutex coutMtx;
         if (!debug) {
@@ -388,62 +427,34 @@ void processChunk(int chunk_index, bool debug) {
               if (val == 0)
                 continue;
 
-              if (sLen == 25 && script[0] == 0x76 && script[1] == 0xa9 &&
-                  script[2] == 0x14 && script[23] == 0x88 &&
-                  script[24] == 0xac) {
-                TKey kBuf;
-                memcpy(kBuf, script.data() + 3, 20);
-                uint64_t fH =
-                    SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
-                for (int f = 0; f < NUM_FILTERS; ++f) {
-                  uint64_t h = fH & ((1ull << filterBitsExp[f]) - 1);
-                  preLookups[f][h >> tabS].fetch_or(((TTab)1 << (h & tabM)),
-                                                    std::memory_order_relaxed);
+              {
+                TKey kBuf = {};
+                bool recognised = false;
+                if (sLen==25 && script[0]==0x76 && script[1]==0xa9 && script[2]==0x14 && script[23]==0x88 && script[24]==0xac) {
+                  memcpy(kBuf, script.data()+3, 20); lP2PKH++; recognised=true;
+                  if (debug && !dbg_p2pkh) { std::lock_guard<std::mutex> lock(coutMtx); cout << "[DEBUG] " << filename << " | P2PKH:  " << toHex(vector<uint8_t>(kBuf,kBuf+20)) << "\n"; dbg_p2pkh=true; }
+                } else if (sLen==23 && script[0]==0xa9 && script[1]==0x14 && script[22]==0x87) {
+                  memcpy(kBuf, script.data()+2, 20); lP2SH++; recognised=true;
+                  if (debug && !dbg_p2sh) { std::lock_guard<std::mutex> lock(coutMtx); cout << "[DEBUG] " << filename << " | P2SH:   " << toHex(vector<uint8_t>(kBuf,kBuf+20)) << "\n"; dbg_p2sh=true; }
+                } else if (sLen==22 && script[0]==0x00 && script[1]==0x14) {
+                  memcpy(kBuf, script.data()+2, 20); lP2WPKH++; recognised=true;
+                  if (debug && !dbg_p2wpkh) { std::lock_guard<std::mutex> lock(coutMtx); cout << "[DEBUG] " << filename << " | P2WPKH: " << toHex(vector<uint8_t>(kBuf,kBuf+20)) << "\n"; dbg_p2wpkh=true; }
+                } else if (sLen==34 && script[0]==0x51 && script[1]==0x20) {
+                  memcpy(kBuf, script.data()+2, 32); lP2TR++; recognised=true;
+                } else if (sLen==34 && script[0]==0x00 && script[1]==0x20) {
+                  memcpy(kBuf, script.data()+2, 32); lP2WSH++; recognised=true;
+                } else if (sLen==35 && script[0]==0x21 && script[34]==0xac) {
+                  auto h=hash160(script.data()+1,33); memcpy(kBuf,h.data(),20); lP2PK++; recognised=true;
+                } else if (sLen==67 && script[0]==0x41 && script[66]==0xac) {
+                  auto h=hash160(script.data()+1,65); memcpy(kBuf,h.data(),20); lP2PK++; recognised=true;
                 }
-                lP2PKH++;
-                lTotal++;
-                if (debug && !dbg_p2pkh) {
-                  std::lock_guard<std::mutex> lock(coutMtx);
-                  cout << "[DEBUG] " << filename << " | P2PKH:  "
-                       << toHex(vector<uint8_t>(kBuf, kBuf + 20)) << "\n";
-                  dbg_p2pkh = true;
-                }
-              } else if (sLen == 23 && script[0] == 0xa9 && script[1] == 0x14 &&
-                         script[22] == 0x87) {
-                TKey kBuf;
-                memcpy(kBuf, script.data() + 2, 20);
-                uint64_t fH =
-                    SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
-                for (int f = 0; f < NUM_FILTERS; ++f) {
-                  uint64_t h = fH & ((1ull << filterBitsExp[f]) - 1);
-                  preLookups[f][h >> tabS].fetch_or(((TTab)1 << (h & tabM)),
-                                                    std::memory_order_relaxed);
-                }
-                lP2SH++;
-                lTotal++;
-                if (debug && !dbg_p2sh) {
-                  std::lock_guard<std::mutex> lock(coutMtx);
-                  cout << "[DEBUG] " << filename << " | P2SH:   "
-                       << toHex(vector<uint8_t>(kBuf, kBuf + 20)) << "\n";
-                  dbg_p2sh = true;
-                }
-              } else if (sLen == 22 && script[0] == 0x00 && script[1] == 0x14) {
-                TKey kBuf;
-                memcpy(kBuf, script.data() + 2, 20);
-                uint64_t fH =
-                    SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
-                for (int f = 0; f < NUM_FILTERS; ++f) {
-                  uint64_t h = fH & ((1ull << filterBitsExp[f]) - 1);
-                  preLookups[f][h >> tabS].fetch_or(((TTab)1 << (h & tabM)),
-                                                    std::memory_order_relaxed);
-                }
-                lP2WPKH++;
-                lTotal++;
-                if (debug && !dbg_p2wpkh) {
-                  std::lock_guard<std::mutex> lock(coutMtx);
-                  cout << "[DEBUG] " << filename << " | P2WPKH: "
-                       << toHex(vector<uint8_t>(kBuf, kBuf + 20)) << "\n";
-                  dbg_p2wpkh = true;
+                if (recognised) {
+                  uint64_t fH = SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
+                  for (int f = 0; f < NUM_FILTERS; ++f) {
+                    uint64_t h = fH & ((1ull << filterBitsExp[f]) - 1);
+                    preLookups[f][h >> tabS].fetch_or(((TTab)1 << (h & tabM)), std::memory_order_relaxed);
+                  }
+                  lTotal++;
                 }
               }
             }
@@ -469,6 +480,9 @@ void processChunk(int chunk_index, bool debug) {
           count_p2pkh += lP2PKH;
           count_p2sh += lP2SH;
           count_p2wpkh += lP2WPKH;
+          count_p2tr += lP2TR;
+          count_p2wsh += lP2WSH;
+          count_p2pk += lP2PK;
         }
       }
     });
@@ -483,7 +497,7 @@ void processChunk(int chunk_index, bool debug) {
   }
 
   cout << "\nDone parsing chunk " << chunk_index << "!\n";
-  cout << "Saving all 7 filters to disk (total ~4 GB)...\n";
+  cout << "Saving all 3 filters to disk...\n";
 
   for (int idx = 0; idx < NUM_FILTERS; ++idx) {
     string filename =
@@ -510,13 +524,18 @@ void processChunk(int chunk_index, bool debug) {
   logOut << "  - P2PKH:  " << count_p2pkh << "\n";
   logOut << "  - P2SH:   " << count_p2sh << "\n";
   logOut << "  - P2WPKH: " << count_p2wpkh << "\n";
+  logOut << "  - P2TR:   " << count_p2tr << "\n";
+  logOut << "  - P2WSH:  " << count_p2wsh << "\n";
+  logOut << "  - P2PK:   " << count_p2pk << "\n";
   logOut.close();
 
-  cout << "Extracted a total of " << total_payloads_written
-       << " addresses (20-byte chunks)\n";
+  cout << "Extracted a total of " << total_payloads_written << " entries (32-byte keys)\n";
   cout << "  - P2PKH:  " << count_p2pkh << "\n";
   cout << "  - P2SH:   " << count_p2sh << "\n";
   cout << "  - P2WPKH: " << count_p2wpkh << "\n";
+  cout << "  - P2TR:   " << count_p2tr << "\n";
+  cout << "  - P2WSH:  " << count_p2wsh << "\n";
+  cout << "  - P2PK:   " << count_p2pk << "\n";
 }
 
 // ==============================================================================
@@ -546,7 +565,7 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
   sort(datFiles.begin(), datFiles.end());
   cout << "Sequential UTXO pass over " << datFiles.size() << " files...\n";
 
-  unordered_map<UTXOKey, array<uint8_t,20>, UTXOKeyHash> utxoMap;
+  unordered_map<UTXOKey, array<uint8_t,32>, UTXOKeyHash> utxoMap;
   utxoMap.reserve(200000000);
 
   uint64_t totalAdded = 0, totalRemoved = 0;
@@ -611,7 +630,7 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
 
         uint64_t outC = readVarIntBuf(file, txRaw);
 
-        struct OutEntry { uint32_t vout; array<uint8_t,20> h160; };
+        struct OutEntry { uint32_t vout; array<uint8_t,32> key32; };
         vector<OutEntry> outEntries;
 
         for (uint64_t i = 0; i < outC; ++i) {
@@ -623,15 +642,23 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
           if (sLen > 0) file.read(reinterpret_cast<char*>(sc.data()), sLen);
           txRaw.insert(txRaw.end(), sc.begin(), sc.end());
           if (val > 0) {
-            array<uint8_t,20> h160;
+            array<uint8_t,32> key32 = {};
             bool ok = false;
             if (sLen==25 && sc[0]==0x76 && sc[1]==0xa9 && sc[2]==0x14 && sc[23]==0x88 && sc[24]==0xac)
-              { memcpy(h160.data(), sc.data()+3, 20); ok = true; }
+              { memcpy(key32.data(), sc.data()+3, 20); ok=true; }
             else if (sLen==23 && sc[0]==0xa9 && sc[1]==0x14 && sc[22]==0x87)
-              { memcpy(h160.data(), sc.data()+2, 20); ok = true; }
+              { memcpy(key32.data(), sc.data()+2, 20); ok=true; }
             else if (sLen==22 && sc[0]==0x00 && sc[1]==0x14)
-              { memcpy(h160.data(), sc.data()+2, 20); ok = true; }
-            if (ok) outEntries.push_back({(uint32_t)i, h160});
+              { memcpy(key32.data(), sc.data()+2, 20); ok=true; }
+            else if (sLen==34 && sc[0]==0x51 && sc[1]==0x20)
+              { memcpy(key32.data(), sc.data()+2, 32); ok=true; }
+            else if (sLen==34 && sc[0]==0x00 && sc[1]==0x20)
+              { memcpy(key32.data(), sc.data()+2, 32); ok=true; }
+            else if (sLen==35 && sc[0]==0x21 && sc[34]==0xac)
+              { auto h=hash160(sc.data()+1,33); memcpy(key32.data(),h.data(),20); ok=true; }
+            else if (sLen==67 && sc[0]==0x41 && sc[66]==0xac)
+              { auto h=hash160(sc.data()+1,65); memcpy(key32.data(),h.data(),20); ok=true; }
+            if (ok) outEntries.push_back({(uint32_t)i, key32});
           }
         }
 
@@ -659,7 +686,7 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
           UTXOKey key;
           memcpy(key.data, txid.data(), 32);
           memcpy(key.data+32, &out.vout, 4);
-          utxoMap[key] = out.h160;
+          utxoMap[key] = out.key32;
           totalAdded++;
         }
       }
@@ -671,9 +698,9 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
        << " (added=" << totalAdded << " removed=" << totalRemoved << ")\n";
   cout << "Populating balance filters...\n";
 
-  for (auto &[key, h160] : utxoMap) {
-    TKey h160key; memcpy(h160key, h160.data(), 20);
-    uint64_t fH = SNVByte<0x00000100000001B3ull>(h160key, 0xCBF29CE484222325ull);
+  for (auto &[key, key32] : utxoMap) {
+    TKey kBuf; memcpy(kBuf, key32.data(), 32);
+    uint64_t fH = SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
     for (int f = 0; f < NUM_BAL_FILTERS; ++f) {
       uint64_t h = fH & ((1ull << balFilterBitsExp[f]) - 1);
       balLookups[f][h >> tabS].fetch_or(((TTab)1 << (h & tabM)), std::memory_order_relaxed);
@@ -846,8 +873,8 @@ void cmdTest(const string &input) {
     return;
   }
 
-  TKey keyBuffer;
-  for (int i = 0; i < 20; ++i)
+  TKey keyBuffer = {};
+  for (int i = 0; i < 20 && i < (int)payload.size(); ++i)
     keyBuffer[i] = payload[i];
   uint64_t fullHash =
       SNVByte<0x00000100000001B3ull>(keyBuffer, 0xCBF29CE484222325ull);

@@ -131,13 +131,8 @@
 
 <div class="filter-row">
     <span class="filter-lbl">Local Filter:</span>
-    <button class="cf-btn" data-mb="32"   data-bits="28" onclick="filterClick(32,28)">32M</button>
-    <button class="cf-btn" data-mb="64"   data-bits="29" onclick="filterClick(64,29)">64M</button>
-    <button class="cf-btn" data-mb="128"  data-bits="30" onclick="filterClick(128,30)">128M</button>
     <button class="cf-btn" data-mb="256"  data-bits="31" onclick="filterClick(256,31)">256M</button>
-    <button class="cf-btn" data-mb="512"  data-bits="32" onclick="filterClick(512,32)">512M</button>
     <button class="cf-btn" data-mb="1024" data-bits="33" onclick="filterClick(1024,33)">1G</button>
-    <button class="cf-btn" data-mb="2048" data-bits="34" onclick="filterClick(2048,34)">2G</button>
 </div>
 
 <div class="idb-row" id="idbRow" style="display:none">
@@ -170,24 +165,45 @@
 <script>
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function fmtMB(b) { return (b/1048576).toFixed(1)+' MB'; }
-function filterLabel(f) { return f.replace('mb.bin','M').replace('1024M','1G').replace('2048M','2G'); }
+function filterLabel(f) {
+    return f.replace('mb_bal.bin',' bal').replace('mb.bin','')
+             .replace('16384',' 16G').replace('1024',' 1G').replace('2048',' 2G').replace('256',' 256M').trim();
+}
 
 function logServerResults(results, totalMs, netMs, clientFound) {
-    // pad labels to uniform width for column alignment
-    const labels = results.map(r => filterLabel(r.filter));
-    const w = Math.max(...labels.map(l => l.length));
-    results.forEach((r, i) => {
-        const pre    = i === 0 ? 'server  ' : '        ';
-        const label  = labels[i].padEnd(w, ' ');
+    const addrResults = results.filter(r => !r.filter.includes('_bal'));
+    const balResults  = results.filter(r =>  r.filter.includes('_bal'));
+
+    const allLabels = results.map(r => filterLabel(r.filter));
+    const w = Math.max(...allLabels.map(l => l.length));
+
+    addrResults.forEach((r, i) => {
+        const pre   = i === 0 ? 'server  ' : '        ';
+        const label = filterLabel(r.filter).padEnd(w, ' ');
         if (r.error) {
             log(`${pre}${label}  error: ${r.error}`, 'err');
         } else {
-            const status  = r.found ? 'HIT ' : 'MISS';
-            const flag    = clientFound !== null && clientFound !== r.found ? '  !' : '';
-            const type    = r.found ? 'ok' : (flag ? 'err' : 'dim');
+            const status = r.found ? 'HIT ' : 'MISS';
+            const flag   = clientFound !== null && clientFound !== r.found ? '  !' : '';
+            const type   = r.found ? 'ok' : (flag ? 'err' : 'dim');
             log(`${pre}${label}  ${status}${flag}`, type);
         }
     });
+
+    if (balResults.length) {
+        balResults.forEach((r, i) => {
+            const pre   = i === 0 ? 'balance ' : '        ';
+            const label = filterLabel(r.filter).padEnd(w, ' ');
+            if (r.error) {
+                log(`${pre}${label}  error: ${r.error}`, 'err');
+            } else {
+                const status = r.found ? 'HIT ' : 'MISS';
+                const type   = r.found ? 'ok' : 'dim';
+                log(`${pre}${label}  ${status}`, type);
+            }
+        });
+    }
+
     log(`        ${''.padEnd(w, ' ')}  php ${totalMs}ms  net ${netMs}ms`, 'dim');
 }
 
@@ -224,15 +240,25 @@ function decodeBech32(str) {
     str = str.toLowerCase();
     if (!str.startsWith('bc1') || str.length < 42) throw new Error("Invalid SegWit/Taproot address.");
     const ALPHA = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
-    let bin = "";
-    for (let i = 4; i < 36; i++) {
-        const idx = ALPHA.indexOf(str[i]);
-        if (idx < 0) throw new Error("Invalid Bech32 char: " + str[i]);
-        bin += idx.toString(2).padStart(5,'0');
+    const witnessVer = str[3];
+    const isP2TR = witnessVer === 'p';
+    const isV0   = witnessVer === 'q';
+    if (!isP2TR && !isV0) throw new Error("Unsupported witness version.");
+    // data chars: after witness version char, before 6-char checksum
+    const dataChars = str.slice(4, str.length - 6);
+    // convert 5-bit groups to 8-bit bytes
+    let bits = 0, value = 0;
+    const bytes = [];
+    for (const c of dataChars) {
+        const idx = ALPHA.indexOf(c);
+        if (idx < 0) throw new Error("Invalid Bech32 char: " + c);
+        value = (value << 5) | idx;
+        bits += 5;
+        if (bits >= 8) { bits -= 8; bytes.push((value >> bits) & 0xff); }
     }
-    let hex = "";
-    for (let i = 0; i < 40; i++) hex += parseInt(bin.substring(i*4, i*4+4), 2).toString(16);
-    return hex;
+    const expectedLen = isP2TR ? 32 : 20;
+    if (bytes.length !== expectedLen) throw new Error(`Expected ${expectedLen} bytes, got ${bytes.length}.`);
+    return bytes.map(b => b.toString(16).padStart(2,'0')).join('');
 }
 
 // ── FNV-1a 64-bit ─────────────────────────────────────────────────────────────
@@ -240,10 +266,11 @@ const FNV_PRIME  = 0x00000100000001B3n;
 const FNV_OFFSET = 0xCBF29CE484222325n;
 const MASK64     = (1n << 64n) - 1n;
 
-function fnv1a(hex20) {
+function fnv1a(hex32) {
+    const h64 = hex32.padEnd(64, '0');
     let h = FNV_OFFSET;
-    for (let i = 0; i < 40; i += 2)
-        h = ((h ^ BigInt(parseInt(hex20.substring(i,i+2),16))) * FNV_PRIME) & MASK64;
+    for (let i = 0; i < 64; i += 2)
+        h = ((h ^ BigInt(parseInt(h64.substring(i,i+2),16))) * FNV_PRIME) & MASK64;
     return h;
 }
 
@@ -302,7 +329,7 @@ async function refreshIDBState() {
     if (!keys.length) { delRow.style.display = 'none'; return; }
     delRow.style.display = '';
     delList.innerHTML = '';
-    const labels = { 32:'32M', 64:'64M', 128:'128M', 256:'256M', 512:'512M', 1024:'1G', 2048:'2G' };
+    const labels = { 256:'256M', 1024:'1G' };
     keys.sort((a,b)=>a-b).forEach(mb => {
         const btn = document.createElement('button');
         btn.className = 'del-btn';
@@ -322,10 +349,10 @@ async function refreshIDBState() {
 // ── CLIENT FILTER ─────────────────────────────────────────────────────────────
 const cf = { buffer: null, view: null, sizeMB: null, bitsExp: null, abort: null };
 
-function clientLookup(hash160) {
+function clientLookup(filterKey) {
     if (!cf.view) return null;
     const t0    = performance.now();
-    const fullH = fnv1a(hash160);
+    const fullH = fnv1a(filterKey);
     const trunc = fullH & ((1n << BigInt(cf.bitsExp)) - 1n);
     const row   = Number(trunc >> 6n);
     const col   = Number(trunc & 63n);
@@ -444,25 +471,37 @@ async function verifyInput() {
     newUrl.searchParams.set('address', raw);
     window.history.replaceState({}, '', newUrl);
 
-    let hash160 = '', detectType = '';
+    let filterKey = '', detectType = '';
     try {
-        if (raw.toLowerCase().startsWith('bc1') && raw.length >= 42) {
-            hash160 = decodeBech32(raw); detectType = 'Bech32';
+        const rawLow = raw.toLowerCase();
+        if (rawLow.startsWith('bc1p') && raw.length >= 62) {
+            // P2TR: 32-byte x-only pubkey → 64-char hex directly
+            filterKey = decodeBech32(raw); detectType = 'P2TR';
+        } else if (rawLow.startsWith('bc1') && raw.length >= 42) {
+            // P2WPKH: 20-byte hash → zero-pad to 32 bytes
+            filterKey = decodeBech32(raw).padEnd(64, '0'); detectType = 'P2WPKH';
         } else if ((raw[0]==='1'||raw[0]==='3') && raw.length>=26 && raw.length<=35) {
-            hash160 = decodeBase58(raw); detectType = 'Base58';
+            // P2PKH / P2SH: Hash160 → zero-pad to 32 bytes
+            filterKey = decodeBase58(raw).padEnd(64, '0');
+            detectType = raw[0]==='1' ? 'P2PKH' : 'P2SH';
+        } else if (raw.length===64 && /^[0-9a-fA-F]+$/.test(raw)) {
+            // Raw 32-byte hex (P2TR x-only pubkey or P2WSH script hash)
+            filterKey = rawLow; detectType = '32-byte';
         } else if (raw.length===40 && /^[0-9a-fA-F]+$/.test(raw)) {
-            hash160 = raw.toLowerCase(); detectType = 'Hash160';
+            // Raw Hash160 → zero-pad to 32 bytes
+            filterKey = rawLow.padEnd(64, '0'); detectType = 'Hash160';
         } else if ((raw.length===66||raw.length===130) && /^[0-9a-fA-F]+$/.test(raw)) {
+            // Raw pubkey → Hash160 → zero-pad
             const w = CryptoJS.enc.Hex.parse(raw);
-            hash160 = CryptoJS.RIPEMD160(CryptoJS.SHA256(w)).toString(CryptoJS.enc.Hex);
+            filterKey = CryptoJS.RIPEMD160(CryptoJS.SHA256(w)).toString(CryptoJS.enc.Hex).padEnd(64, '0');
             detectType = 'PubKey';
         } else { throw new Error("Unrecognized format."); }
 
-        const cr = clientLookup(hash160);
+        const cr = clientLookup(filterKey);
 
         // always fetch server in parallel (fire and forget start)
         const serverT0 = performance.now();
-        const serverPromise = fetch(`test.php?address_hex=${hash160}&_cb=${Date.now()}`)
+        const serverPromise = fetch(`test.php?address_hex=${filterKey}&_cb=${Date.now()}`)
             .then(r => r.json())
             .then(d => ({ d, net: (performance.now()-serverT0).toFixed(0) }))
             .catch(e => ({ err: e.message }));
@@ -470,8 +509,8 @@ async function verifyInput() {
         if (cr !== null) {
             // client result is instant — show immediately
             log(`${detectType}  ${raw}`, 'hi');
-        log(`client · ${cf.sizeMB}mb · ${cr.ms}ms · ${cr.found?'HIT':'MISS'}`, cr.found?'ok':'data');
-            showResult(cr.found, hash160, detectType, `${cf.sizeMB}mb`, cr.ms, null, null);
+            log(`client · ${cf.sizeMB}mb · ${cr.ms}ms · ${cr.found?'HIT':'MISS'}`, cr.found?'ok':'data');
+            showResult(cr.found, filterKey, detectType, `${cf.sizeMB}mb`, cr.ms, null, null);
             addHistory(raw, cr.found);
 
             // then append server result to log once it arrives
@@ -479,7 +518,7 @@ async function verifyInput() {
                 if (err) { log(`server · error: ${err}`, 'err'); return; }
                 if (d.error) { log(`server · error: ${d.error}`, 'err'); return; }
                 logServerResults(d.results, d.time_total_ms, net, cr.found);
-                showResult(cr.found, hash160, detectType, `${cf.sizeMB}mb`, cr.ms, d.time_total_ms, net);
+                showResult(cr.found, filterKey, detectType, `${cf.sizeMB}mb`, cr.ms, d.time_total_ms, net);
             });
         } else {
             // no client filter — wait for server only
@@ -489,7 +528,7 @@ async function verifyInput() {
             log(`${detectType}  ${raw}`, 'hi');
             logServerResults(d.results, d.time_total_ms, net, null);
             const best = d.results[0];
-            showResult(best.found, hash160, detectType, best.filter, null, d.time_total_ms, net);
+            showResult(best.found, filterKey, detectType, best.filter, null, d.time_total_ms, net);
             addHistory(raw, best.found);
         }
     } catch (err) {
@@ -499,7 +538,7 @@ async function verifyInput() {
     btn.disabled = false; btn.textContent = 'Check';
 }
 
-function showResult(found, hash160, detect, filterSrc, clientMs, phpMs, netMs) {
+function showResult(found, filterKey, detect, filterSrc, clientMs, phpMs, netMs) {
     const box = document.getElementById('resultBox');
     box.className = found ? 'found' : 'miss';
     const parts = [];
@@ -507,7 +546,7 @@ function showResult(found, hash160, detect, filterSrc, clientMs, phpMs, netMs) {
     if (phpMs   !== null) parts.push(`php ${phpMs}ms`);
     if (netMs   !== null) parts.push(`net ${netMs}ms`);
     box.innerHTML = `<span class="r-badge">${found ? '✓ FOUND' : '— NOT FOUND'}</span>`
-        + `<span class="r-hash">${hash160.toUpperCase()}</span>`
+        + `<span class="r-hash">${filterKey.toUpperCase()}</span>`
         + `<span class="r-meta">${esc(filterSrc)} · ${parts.join(' · ')}</span>`;
 }
 

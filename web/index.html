@@ -304,19 +304,38 @@ const FNV_PRIME  = 0x00000100000001B3n;
 const FNV_OFFSET = 0xCBF29CE484222325n;
 const MASK64     = (1n << 64n) - 1n;
 
-function fnv1a(hex20) {
+function fnv1a(key) {
+    // accepts 40-char (20-byte Hash160) or 64-char (32-byte) hex; zero-pads to 64
+    const k = key.padEnd(64, '0');
     let h = FNV_OFFSET;
-    for (let i = 0; i < 40; i += 2)
-        h = ((h ^ BigInt(parseInt(hex20.substring(i,i+2),16))) * FNV_PRIME) & MASK64;
+    for (let i = 0; i < 64; i += 2)
+        h = ((h ^ BigInt(parseInt(k.substring(i,i+2),16))) * FNV_PRIME) & MASK64;
     return h;
 }
 
-// Compute server-side bloom filter position for 2G filter (bitsExp=34).
+// Compute server-side bloom filter position for 16G filter (bitsExp=37).
 // Returns [row, col] — PHP does fseek(row*8) and checks bit col, no GMP needed.
-const SERVER_MASK = (1n << 34n) - 1n;
-function serverPos(hex20) {
-    const trunc = fnv1a(hex20) & SERVER_MASK;
+const SERVER_MASK = (1n << 37n) - 1n;
+function serverPos(key) {
+    const trunc = fnv1a(key) & SERVER_MASK;
     return [Number(trunc >> 6n), Number(trunc & 63n)];
+}
+
+// Balance filter position (2G bal filter, bitsExp=34).
+const BAL_MASK = (1n << 34n) - 1n;
+function balPos(key) {
+    const trunc = fnv1a(key) & BAL_MASK;
+    return [Number(trunc >> 6n), Number(trunc & 63n)];
+}
+
+// Check balance filter for items that passed server filter (sets item.balFound).
+async function checkBalanceFilter(items) {
+    if (!items.length) return;
+    try {
+        const resp = await fetch('index_bal.php', { method: 'POST', body: packLookups(items.map(function(f) { return balPos(f.filterKey); })) });
+        const buf  = new Uint32Array(await resp.arrayBuffer());
+        for (let i = 0; i < items.length; i++) items[i].balFound = readBit(buf, i) === 1;
+    } catch(e) { log('balance filter error: ' + e.message, 'err'); }
 }
 
 // Pack [[row,col],...] into a binary buffer: 5 bytes per lookup (uint32 LE row + uint8 col).
@@ -408,10 +427,10 @@ async function refreshIDBState() {
 // ── CLIENT FILTER ─────────────────────────────────────────────────────────────
 const cf = { buffer: null, view: null, sizeMB: null, bitsExp: null, abort: null };
 
-function clientLookup(hash160) {
+function clientLookup(filterKey) {
     if (!cf.view) return null;
     const t0    = performance.now();
-    const fullH = fnv1a(hash160);
+    const fullH = fnv1a(filterKey);
     const trunc = fullH & ((1n << BigInt(cf.bitsExp)) - 1n);
     const row   = Number(trunc >> 6n);
     const col   = Number(trunc & 63n);
@@ -605,9 +624,33 @@ function b32Checksum(hrp,data){const v=b32HrpExpand(hrp).concat(data).concat([0,
 function convertBits(data,from,to,pad){if(pad===undefined)pad=true;let acc=0,bits=0;const r=[],maxv=(1<<to)-1;for(let i=0;i<data.length;i++){const v=data[i];acc=(acc<<from)|v;bits+=from;while(bits>=to){bits-=to;r.push((acc>>bits)&maxv);}}if(pad&&bits>0)r.push((acc<<(to-bits))&maxv);return r;}
 function bech32P2wpkh(h160){const prog=[0].concat(convertBits(Array.from(h160),8,5));const cs=b32Checksum('bc',prog);return 'bc1'+prog.concat(cs).map(function(d){return B32_CHARSET[d];}).join('');}
 
-function addrP2PKH(privKey)      { const h=hash160(privToPub(privKey)); return {addr:base58Check([0x00].concat(Array.from(h))), h160:bytesToHex(h)}; }
-function addrP2WPKH(privKey)     { const h=hash160(privToPub(privKey)); return {addr:bech32P2wpkh(h), h160:bytesToHex(h)}; }
-function addrP2SHP2WPKH(privKey) { const h=hash160(privToPub(privKey)); const rs=new Uint8Array([0x00,0x14].concat(Array.from(h))); const sh=hash160(rs); return {addr:base58Check([0x05].concat(Array.from(sh))), h160:bytesToHex(h)}; }
+// Taproot: compute tweaked output key (BIP341 keypath, no scripts)
+function taprootOutputKey(pub33) {
+    const xOnly = pub33.slice(1, 33);
+    const tagH  = CryptoJS.SHA256(CryptoJS.enc.Utf8.parse('TapTweak')).toString();
+    const twkH  = CryptoJS.SHA256(CryptoJS.enc.Hex.parse(tagH + tagH + bytesToHex(xOnly))).toString();
+    const P = EC.keyFromPublic(pub33).getPublic();
+    const T = EC.keyFromPrivate(hexToBytes(twkH)).getPublic();
+    const Q = P.add(T);
+    return new Uint8Array(Q.getX().toArrayLike(Uint8Array, 'be', 32));
+}
+function bech32mP2tr(xOnly32) {
+    const prog = [1].concat(convertBits(Array.from(xOnly32), 8, 5));
+    const v    = b32HrpExpand('bc').concat(prog).concat([0,0,0,0,0,0]);
+    const pm   = b32Polymod(v) ^ 0x2bc830a3;
+    const cs   = Array.from({length:6}, function(_,i){ return (pm >> (5*(5-i))) & 31; });
+    return 'bc1' + prog.concat(cs).map(function(d){ return B32_CHARSET[d]; }).join('');
+}
+function addrP2TR(privKey) {
+    const pub   = privToPub(privKey);
+    const xOnly = taprootOutputKey(pub);
+    const fk    = bytesToHex(xOnly);
+    return { addr: bech32mP2tr(xOnly), h160: null, filterKey: fk };
+}
+
+function addrP2PKH(privKey)      { const h=hash160(privToPub(privKey)); const h160=bytesToHex(h); return {addr:base58Check([0x00].concat(Array.from(h))), h160, filterKey:h160}; }
+function addrP2WPKH(privKey)     { const h=hash160(privToPub(privKey)); const h160=bytesToHex(h); return {addr:bech32P2wpkh(h), h160, filterKey:h160}; }
+function addrP2SHP2WPKH(privKey) { const h=hash160(privToPub(privKey)); const rs=new Uint8Array([0x00,0x14].concat(Array.from(h))); const sh=hash160(rs); const shHex=bytesToHex(sh); return {addr:base58Check([0x05].concat(Array.from(sh))), h160:shHex, filterKey:shHex}; }
 
 // ── URL ENCODING ──────────────────────────────────────────────────────────────
 // 12 words × 11 bits = 132 bits = 17 bytes → ~23 chars base64url
@@ -671,7 +714,7 @@ function saveHitToHistory(words, found) {
     hist.unshift({
         ts: Date.now(),
         words: words,
-        found: found.map(function(f) { return { type: f.type, addr: f.addr, serverFound: f.serverFound }; })
+        found: found.map(function(f) { return { type: f.type, addr: f.addr, serverFound: f.serverFound, balFound: f.balFound }; })
     });
     if (hist.length > MAX_HITS) hist.splice(MAX_HITS);
     localStorage.setItem(HITS_KEY, JSON.stringify(hist));
@@ -706,8 +749,11 @@ function renderHitsHistory() {
         entry.found.forEach(function(f) {
             const srv = f.serverFound === true ? ' <span style="color:#1a7a1a">\u2713srv</span>'
                       : f.serverFound === false ? ' <span style="color:#888">?srv</span>' : '';
+            const bal = f.serverFound === true
+                      ? (f.balFound === true ? ' <span style="color:#1a7a1a">\u2713btc</span>'
+                      : f.balFound === false  ? ' <span style="color:#888">nobal</span>' : '') : '';
             addrHtml += '<div class="hits-entry-addr" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">'
-                + '<span>' + esc(f.type) + ' ' + esc(f.addr) + srv + '</span>'
+                + '<span>' + esc(f.type) + ' ' + esc(f.addr) + srv + bal + '</span>'
                 + '<span class="res-bal" style="font-size:11px;font-family:monospace;white-space:nowrap;flex:1;color:#888"></span>'
                 + '<a href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank" onclick="event.stopPropagation()" class="res-link">mempool&#8599;</a>'
                 + '</div>';
@@ -766,30 +812,30 @@ async function flushPendingHits() {
     lastFlushTime = Date.now();
 
     // Deduplicate by h160, compute server bloom positions (client-side, no PHP GMP needed)
-    const uniqueH160s = [];
-    const seenH160 = {};
+    const uniqueKeys = [];
+    const seenKey = {};
     for (let i = 0; i < batch.length; i++) {
-        const h = batch[i].h160;
-        if (!seenH160[h]) { seenH160[h] = true; uniqueH160s.push(h); }
+        const k = batch[i].filterKey;
+        if (!seenKey[k]) { seenKey[k] = true; uniqueKeys.push(k); }
     }
-    const lookups = uniqueH160s.map(serverPos); // [[row,col], ...]
+    const lookups = uniqueKeys.map(serverPos); // [[row,col], ...]
 
-    log('batch: checking ' + uniqueH160s.length + ' addr from ' + batch.length + ' local hits\u2026', 'dim');
+    log('batch: checking ' + uniqueKeys.length + ' addr from ' + batch.length + ' local hits\u2026', 'dim');
     try {
         const t0   = performance.now();
         const resp = await fetch('index.php', { method: 'POST', body: packLookups(lookups) });
         const buf  = new Uint32Array(await resp.arrayBuffer()); // [lo, hi]
         const ms   = (performance.now() - t0).toFixed(1);
 
-        // Build h160 → bool map from positional bitmask
-        const h160Result = {};
-        for (let i = 0; i < uniqueH160s.length; i++) h160Result[uniqueH160s[i]] = readBit(buf, i) === 1;
+        // Build filterKey → bool map from positional bitmask
+        const keyResult = {};
+        for (let i = 0; i < uniqueKeys.length; i++) keyResult[uniqueKeys[i]] = readBit(buf, i) === 1;
 
         // Group confirmed items by mnemonic
         const byMnemonic = {};
         for (let i = 0; i < batch.length; i++) {
             const item = batch[i];
-            if (h160Result[item.h160] === true) {
+            if (keyResult[item.filterKey] === true) {
                 const key = item.words.join(' ');
                 if (!byMnemonic[key]) byMnemonic[key] = { words: item.words, found: [] };
                 byMnemonic[key].found.push({ type: item.type, addr: item.addr, serverFound: true });
@@ -799,6 +845,11 @@ async function flushPendingHits() {
         const groups = Object.values(byMnemonic);
         if (groups.length > 0) {
             log('\u2713 SERVER CONFIRMED ' + groups.length + ' mnemonic(s) \xb7 ' + ms + 'ms', 'ok');
+            // Balance filter check for all server-confirmed items
+            const allConfirmed = groups.reduce(function(a, g) { return a.concat(g.found); }, []);
+            await checkBalanceFilter(allConfirmed);
+            const balHits = allConfirmed.filter(function(f) { return f.balFound; }).length;
+            if (balHits) log('balance filter: ' + balHits + ' confirmed address(es) have unspent BTC', 'ok');
             for (let i = 0; i < groups.length; i++) {
                 log('  ' + groups[i].words.join(' '), 'ok');
                 saveHitToHistory(groups[i].words, groups[i].found);
@@ -807,7 +858,7 @@ async function flushPendingHits() {
                 updateAutoStats();
             }
         } else {
-            log('batch: ' + uniqueH160s.length + ' checked \xb7 ' + ms + 'ms \xb7 no hits', 'dim');
+            log('batch: ' + uniqueKeys.length + ' checked \xb7 ' + ms + 'ms \xb7 no hits', 'dim');
         }
     } catch(e) {
         log('batch server error: ' + e.message, 'err');
@@ -936,6 +987,7 @@ async function _doSpin(fixedWords, opts) {
         { path: "m/44'/0'/0'/0", type: 'P2PKH',       fn: addrP2PKH },
         { path: "m/49'/0'/0'/0", type: 'P2SH-P2WPKH', fn: addrP2SHP2WPKH },
         { path: "m/84'/0'/0'/0", type: 'P2WPKH',      fn: addrP2WPKH },
+        { path: "m/86'/0'/0'/0", type: 'P2TR',         fn: addrP2TR },
     ];
 
     const found = [];
@@ -951,19 +1003,24 @@ async function _doSpin(fixedWords, opts) {
             const acct = await derivePath(seed, path);
             for (let n = 0; n < 20; n++) {
                 const child = await childKey(acct, n, false);
-                const {addr, h160} = fn(child.key);
+                const {addr, h160, filterKey} = fn(child.key);
                 checked++;
-                found.push({type, addr, h160, serverFound: null});
+                found.push({type, addr, h160, filterKey, serverFound: null});
             }
         }
         try {
             const t0s = performance.now();
-            const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.h160); })) });
+            const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.filterKey); })) });
             const buf  = new Uint32Array(await resp.arrayBuffer());
-            serverFilterLabel = '2G';
+            serverFilterLabel = '16G';
             for (let i = 0; i < found.length; i++) found[i].serverFound = readBit(buf, i) === 1;
             const hits = found.filter(function(f) { return f.serverFound; });
             if (!isAuto) log('server: ' + hits.length + ' confirmed / ' + found.length + ' checked \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', hits.length ? 'ok' : 'data');
+            if (hits.length > 0) {
+                await checkBalanceFilter(hits);
+                const balHits = hits.filter(function(f) { return f.balFound; }).length;
+                if (!isAuto) log('balance filter: ' + balHits + '/' + hits.length + ' have unspent BTC', balHits ? 'ok' : 'data');
+            }
             // keep only server hits in found for display
             found.splice(0, found.length, ...hits);
             if (hits.length > 0) saveHitToHistory(words, hits);
@@ -973,11 +1030,11 @@ async function _doSpin(fixedWords, opts) {
         const acct0 = await derivePath(seed, pathDefs[0].path);
         for (let n = 0; n < 5; n++) {
             const child = await childKey(acct0, n, false);
-            const {addr, h160} = pathDefs[0].fn(child.key);
+            const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
             checked++;
-            const res = clientLookup(h160);
+            const res = clientLookup(filterKey);
             if (res && res.found) {
-                found.push({type: pathDefs[0].type, addr, h160, serverFound: null});
+                found.push({type: pathDefs[0].type, addr, h160, filterKey, serverFound: null});
                 if (!isAuto) log('HIT ' + pathDefs[0].type + ' [0/' + n + '] ' + addr, 'ok');
             }
         }
@@ -995,9 +1052,9 @@ async function _doSpin(fixedWords, opts) {
         if (!isAuto) {
             try {
                 const t0s = performance.now();
-                const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.h160); })) });
+                const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.filterKey); })) });
                 const buf  = new Uint32Array(await resp.arrayBuffer());
-                serverFilterLabel = '2G';
+                serverFilterLabel = '16G';
                 for (let i = 0; i < found.length; i++) found[i].serverFound = readBit(buf, i) === 1;
                 log('quick server check \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', 'dim');
             } catch(e) { log('server error: ' + e.message, 'err'); }
@@ -1012,11 +1069,11 @@ async function _doSpin(fixedWords, opts) {
                 // Phase 2: check remaining 55 (P2PKH 5..19 + P2SH + P2WPKH)
                 for (let n = 5; n < 20; n++) {
                     const child = await childKey(acct0, n, false);
-                    const {addr, h160} = pathDefs[0].fn(child.key);
+                    const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
                     checked++;
-                    const res = clientLookup(h160);
+                    const res = clientLookup(filterKey);
                     if (res && res.found) {
-                        found.push({type: pathDefs[0].type, addr, h160, serverFound: null});
+                        found.push({type: pathDefs[0].type, addr, h160, filterKey, serverFound: null});
                         log('HIT ' + pathDefs[0].type + ' [0/' + n + '] ' + addr, 'ok');
                     }
                 }
@@ -1025,11 +1082,11 @@ async function _doSpin(fixedWords, opts) {
                     const acct = await derivePath(seed, path);
                     for (let n = 0; n < 20; n++) {
                         const child = await childKey(acct, n, false);
-                        const {addr, h160} = fn(child.key);
+                        const {addr, h160, filterKey} = fn(child.key);
                         checked++;
-                        const res = clientLookup(h160);
+                        const res = clientLookup(filterKey);
                         if (res && res.found) {
-                            found.push({type, addr, h160, serverFound: null});
+                            found.push({type, addr, h160, filterKey, serverFound: null});
                             log('HIT ' + type + ' [' + pi + '/' + n + '] ' + addr, 'ok');
                         }
                     }
@@ -1037,41 +1094,46 @@ async function _doSpin(fixedWords, opts) {
                 // Server check all found (phase 1 already checked, re-verify together)
                 try {
                     const t0s = performance.now();
-                    const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.h160); })) });
+                    const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.filterKey); })) });
                     const buf  = new Uint32Array(await resp.arrayBuffer());
-                    serverFilterLabel = '2G';
+                    serverFilterLabel = '16G';
                     for (let i = 0; i < found.length; i++) {
                         found[i].serverFound = readBit(buf, i) === 1;
                         log('server ' + (found[i].serverFound ? 'CONFIRMED \u2713' : 'not confirmed') + ' ' + found[i].addr,
                             found[i].serverFound ? 'ok' : 'dim');
                     }
-                    log('server checked ' + found.length + ' \xb7 2G \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', 'dim');
+                    log('server checked ' + found.length + ' \xb7 16G \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', 'dim');
                 } catch(e) { log('server error: ' + e.message, 'err'); }
                 const confirmed = found.filter(function(f) { return f.serverFound === true; });
-                if (confirmed.length > 0) saveHitToHistory(words, confirmed);
+                if (confirmed.length > 0) {
+                    await checkBalanceFilter(confirmed);
+                    const balHits = confirmed.filter(function(f) { return f.balFound; }).length;
+                    log('balance filter: ' + balHits + '/' + confirmed.length + ' have unspent BTC', balHits ? 'ok' : 'data');
+                    saveHitToHistory(words, confirmed);
+                }
             }
         } else {
             // Autospin: phase 1 local hit → check remaining 55, push all to pendingHits
             for (let n = 5; n < 20; n++) {
                 const child = await childKey(acct0, n, false);
-                const {addr, h160} = pathDefs[0].fn(child.key);
+                const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
                 checked++;
-                const res = clientLookup(h160);
-                if (res && res.found) found.push({type: pathDefs[0].type, addr, h160, serverFound: null});
+                const res = clientLookup(filterKey);
+                if (res && res.found) found.push({type: pathDefs[0].type, addr, h160, filterKey, serverFound: null});
             }
             for (let pi = 1; pi < pathDefs.length; pi++) {
                 const {path, type, fn} = pathDefs[pi];
                 const acct = await derivePath(seed, path);
                 for (let n = 0; n < 20; n++) {
                     const child = await childKey(acct, n, false);
-                    const {addr, h160} = fn(child.key);
+                    const {addr, h160, filterKey} = fn(child.key);
                     checked++;
-                    const res = clientLookup(h160);
-                    if (res && res.found) found.push({type, addr, h160, serverFound: null});
+                    const res = clientLookup(filterKey);
+                    if (res && res.found) found.push({type, addr, h160, filterKey, serverFound: null});
                 }
             }
             for (let i = 0; i < found.length; i++)
-                pendingHits.push({ words: words, type: found[i].type, addr: found[i].addr, h160: found[i].h160 });
+                pendingHits.push({ words: words, type: found[i].type, addr: found[i].addr, h160: found[i].h160, filterKey: found[i].filterKey });
         }
 
         if (!isAuto) log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 found ' + found.length, found.length ? 'ok' : 'data');
@@ -1097,23 +1159,35 @@ async function _doSpin(fixedWords, opts) {
 
     const localLabel = cf.sizeMB ? fmtFilterMB(cf.sizeMB) : '?';
     const serverConfirmedCount = found.filter(function(f) { return f.serverFound === true; }).length;
+    const balConfirmedCount    = found.filter(function(f) { return f.balFound === true; }).length;
     let summary = 'Checked ' + checked;
     if (found.length > 0) {
         summary += ' &middot; Local (' + localLabel + '): ' + found.length;
-        if (serverFilterLabel !== null) summary += ' &middot; Server (' + serverFilterLabel + '): ' + serverConfirmedCount;
+        if (serverFilterLabel !== null) {
+            summary += ' &middot; Server (' + serverFilterLabel + '): ' + serverConfirmedCount;
+            if (serverConfirmedCount > 0) summary += ' &middot; Has BTC: ' + balConfirmedCount;
+        }
     } else {
         summary += ' &middot; Found: 0';
     }
     function resItemHtml(f) {
         const srvHtml = f.serverFound === true
-            ? '<span class="res-server confirmed">\u2713 server confirmed</span>'
+            ? '<span class="res-server confirmed">\u2713 server</span>'
             : f.serverFound === false
             ? '<span class="res-server unconfirmed">server: not found</span>'
+            : '';
+        const balHtml = f.serverFound === true
+            ? (f.balFound === true
+                ? '<span class="res-server confirmed">\u2713 has BTC</span>'
+                : f.balFound === false
+                ? '<span class="res-server unconfirmed">no balance</span>'
+                : '')
             : '';
         return '<div class="res-item">'
             + '<span class="res-type">' + esc(f.type) + '</span>'
             + '<span class="res-addr">' + esc(f.addr) + '</span>'
             + srvHtml
+            + balHtml
             + '<span class="res-bal" style="font-size:11px;font-family:monospace;white-space:nowrap;flex:1"></span>'
             + '<a class="res-link" href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank">mempool&#8599;</a>'
             + '</div>';
