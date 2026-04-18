@@ -35,12 +35,18 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
    - Used by the filter test page. Queries all available filter sizes in one request.
    - Returns per-filter results so you can compare accuracy across sizes.
 
+6. **Balance filters & UTXO SQLite** (built during `parse`):
+   - A second pass maintains a UTXO set for **balance-only** blooms (`*mb_bal.bin`) used by `index_bal.php`.
+   - Checkpoints live under `filter/` (`balance_utxo_tip.chk`, etc.); format version **3** stores `key32` plus **`value_sat`** per coin.
+   - When the parser is built **with** SQLite (`sqlite3` headers + `-lsqlite3`), it also writes **`filter/balance_utxo.sqlite`**: one row per unspent tracked output (`txid`, `vout`, `key32`, `value_sat`). The Docker image includes this.
+   - **`web/balance_lookup.php`** (PDO SQLite) returns JSON for a given **`?txid=`** (64 hex), optionally **`&vout=`** and **`&key32=`**. Copy or symlink `filter/balance_utxo.sqlite` next to the script under `web/filter/` if you deploy PHP separately from the parser output path.
+
 ## Installation & Setup
 
 ### Prerequisites
 - Docker (recommended) OR
-- C++17 Compiler (g++ or clang++)
-- PHP 7.4+ with GMP extension
+- C++17 Compiler (g++ or clang++) and, for **`balance_utxo.sqlite`**, SQLite development libraries (e.g. macOS: Xcode CLTs / Homebrew `sqlite`; Linux: `libsqlite3-dev`) so `<sqlite3.h>` is available at compile time
+- PHP 7.4+ with GMP extension (`index.php` / slot machine); optional PDO SQLite for **`balance_lookup.php`**
 
 ### Using Docker
 The easiest way to run the parser is via Docker. The container is fully signal-aware and will gracefully save progress if stopped.
@@ -59,7 +65,10 @@ The Docker container and C++ process are fully signal-aware. If you need to stop
 
 ## Manual Commands (without Docker)
 If running locally, compile from the `parser/` directory first:
-`cd parser && g++ -std=c++17 -O3 main.cpp -o main`
+
+- **With** SQLite export (recommended):  
+  `cd parser && g++ -std=c++17 -O3 main.cpp -o main -lsqlite3`
+- **Without** SQLite headers: the same command without `-lsqlite3` still builds; balance blooms and checkpoints work, but **`balance_utxo.sqlite` is not produced**.
 
 1. **`./main download`**  
    Downloads sample `blk*.dat` files to get you started.
@@ -121,6 +130,9 @@ export BLOCKCHAIN_DEST="./blocks/"
 ```
 
 The subshell `( )` keeps your working directory unchanged after the call. Override `BLOCKCHAIN_SOURCE` and `BLOCKCHAIN_DEST` to match your own paths.
+
+## Balance UTXO skip path
+If `balance_utxo_tip.chk` already matches the current `blk*.dat` manifest, the parser **skips** the balance UTXO replay (including **SQLite** regeneration). To force a full balance rebuild (for example after upgrading checkpoint format or if you deleted only the `.sqlite` file), remove or invalidate the tip checkpoint so the manifest comparison fails, then run `parse` again.
 
 ## Incremental Updates
 Re-run `./main parse` (or the Docker container) periodically to pick up new blocks:
