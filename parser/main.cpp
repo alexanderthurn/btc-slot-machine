@@ -15,6 +15,13 @@
 #include <unordered_map>
 #include <vector>
 
+#if __has_include(<sqlite3.h>)
+#include <sqlite3.h>
+#define BTCSM_HAVE_SQLITE3 1
+#else
+#define BTCSM_HAVE_SQLITE3 0
+#endif
+
 using namespace std;
 namespace fs = std::filesystem;
 
@@ -156,6 +163,13 @@ struct UTXOKeyHash {
     return (size_t)h;
   }
 };
+
+struct UtxoMapVal {
+  array<uint8_t, 32> key32{};
+  uint64_t value_sat = 0;
+};
+
+using UtxoMap = unordered_map<UTXOKey, UtxoMapVal, UTXOKeyHash>;
 
 // ==============================================================================
 // 2. Helper Functions (Decoders, Parsers)
@@ -545,8 +559,9 @@ void processChunk(int chunk_index, bool debug) {
 // 4b. Balance Filter Builder (sequential UTXO pass over all block files)
 // ==============================================================================
 static const char UTXOCP_MAGIC[8] = {'B', 'T', 'U', 'T', 'C', 'P', '0', '1'};
-// v2 checkpoints embed per-file path+size manifests for incremental runs.
-static const uint32_t UTXOCP_VER = 2;
+// v3 checkpoints: same manifest as v2, each UTXO row is 36+32+8 bytes (adds value_sat).
+static const uint32_t UTXOCP_VER = 3;
+static const size_t UTXOCP_ROW_BYTES = 36 + 32 + 8;
 
 // Re-merge this many trailing blk*.dat files when the tip changes (~safety margin
 // vs unstable chain tip; roughly >> 10 blocks per file). Increase if needed.
@@ -592,8 +607,7 @@ static size_t firstManifestDiff(const vector<pair<string, uint64_t>> &a,
 
 static bool writeUtxoStateV2(const string &pathTmp, const string &pathFinal,
                              const vector<pair<string, uint64_t>> &manifest,
-                             const unordered_map<UTXOKey, array<uint8_t, 32>, UTXOKeyHash> &utxoMap,
-                             uint32_t next_file_index) {
+                             const UtxoMap &utxoMap, uint32_t next_file_index) {
   ofstream f(pathTmp, ios::binary | ios::trunc);
   if (!f)
     return false;
@@ -615,7 +629,8 @@ static bool writeUtxoStateV2(const string &pathTmp, const string &pathFinal,
   f.write(reinterpret_cast<const char *>(&n), 8);
   for (const auto &kv : utxoMap) {
     f.write(reinterpret_cast<const char *>(kv.first.data), 36);
-    f.write(reinterpret_cast<const char *>(kv.second.data()), 32);
+    f.write(reinterpret_cast<const char *>(kv.second.key32.data()), 32);
+    f.write(reinterpret_cast<const char *>(&kv.second.value_sat), 8);
   }
   f.close();
   if (!f.good()) {
@@ -630,14 +645,14 @@ static bool writeUtxoStateV2(const string &pathTmp, const string &pathFinal,
   return !ec;
 }
 
-static bool readUtxoManifestV2(ifstream &f, vector<pair<string, uint64_t>> &manifest) {
+static bool readUtxoCheckpointHeader(ifstream &f, vector<pair<string, uint64_t>> &manifest,
+                                     uint32_t &out_ver) {
   char mag[8];
   f.read(mag, 8);
   if (!f || memcmp(mag, UTXOCP_MAGIC, 8) != 0)
     return false;
-  uint32_t ver;
-  f.read(reinterpret_cast<char *>(&ver), 4);
-  if (ver != UTXOCP_VER)
+  f.read(reinterpret_cast<char *>(&out_ver), 4);
+  if (!f || (out_ver != 2u && out_ver != 3u))
     return false;
   uint32_t nman;
   f.read(reinterpret_cast<char *>(&nman), 4);
@@ -664,7 +679,8 @@ static bool readUtxoMetaOnly(const string &path,
   ifstream f(path, ios::binary);
   if (!f)
     return false;
-  if (!readUtxoManifestV2(f, manifest))
+  uint32_t fileVer = 0;
+  if (!readUtxoCheckpointHeader(f, manifest, fileVer))
     return false;
   f.read(reinterpret_cast<char *>(&out_next_file_index), 4);
   uint32_t pad;
@@ -672,18 +688,20 @@ static bool readUtxoMetaOnly(const string &path,
   f.read(reinterpret_cast<char *>(&out_n_entries), 8);
   if (!f || out_n_entries > 500000000ull)
     return false;
-  f.seekg(static_cast<streamoff>(out_n_entries * 68), ios::cur);
+  const size_t rowBytes =
+      (fileVer >= 3u) ? UTXOCP_ROW_BYTES : (36u + 32u);
+  f.seekg(static_cast<streamoff>(out_n_entries * rowBytes), ios::cur);
   return f.good();
 }
 
 static bool readUtxoStateV2(const string &path,
                             vector<pair<string, uint64_t>> &manifest,
-                            uint32_t &out_next_file_index,
-                            unordered_map<UTXOKey, array<uint8_t, 32>, UTXOKeyHash> &utxoMap) {
+                            uint32_t &out_next_file_index, UtxoMap &utxoMap) {
   ifstream f(path, ios::binary);
   if (!f)
     return false;
-  if (!readUtxoManifestV2(f, manifest))
+  uint32_t fileVer = 0;
+  if (!readUtxoCheckpointHeader(f, manifest, fileVer))
     return false;
   f.read(reinterpret_cast<char *>(&out_next_file_index), 4);
   uint32_t pad;
@@ -696,22 +714,133 @@ static bool readUtxoStateV2(const string &path,
   utxoMap.reserve(static_cast<size_t>(min<uint64_t>(n + 65536, 250000000)));
   for (uint64_t i = 0; i < n; ++i) {
     UTXOKey key{};
-    array<uint8_t, 32> key32{};
+    UtxoMapVal val{};
     f.read(reinterpret_cast<char *>(key.data), 36);
-    f.read(reinterpret_cast<char *>(key32.data()), 32);
+    f.read(reinterpret_cast<char *>(val.key32.data()), 32);
+    if (fileVer >= 3u) {
+      f.read(reinterpret_cast<char *>(&val.value_sat), 8);
+    } else {
+      val.value_sat = 0;
+    }
     if (!f) {
       utxoMap.clear();
       return false;
     }
-    utxoMap[key] = key32;
+    utxoMap[key] = val;
   }
   return f.good();
 }
 
+#if BTCSM_HAVE_SQLITE3
+static bool exportBalanceUtxoSqlite(const string &dbPath, const UtxoMap &utxoMap) {
+  string tmp = dbPath + ".tmp";
+  error_code ec;
+  sqlite3_stmt *st = nullptr;
+  sqlite3 *db = nullptr;
+  char *errmsg = nullptr;
+
+  try {
+    fs::remove(tmp);
+  } catch (...) {
+  }
+
+  if (sqlite3_open_v2(tmp.c_str(), &db,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr) != SQLITE_OK) {
+    cerr << "[WARN] sqlite3_open: " << (db ? sqlite3_errmsg(db) : "?") << "\n";
+    if (db)
+      sqlite3_close(db);
+    return false;
+  }
+
+  auto exec = [&](const char *sql) {
+    if (sqlite3_exec(db, sql, nullptr, nullptr, &errmsg) != SQLITE_OK) {
+      cerr << "[WARN] sqlite exec: " << (errmsg ? errmsg : "?") << "\n";
+      sqlite3_free(errmsg);
+      errmsg = nullptr;
+      return false;
+    }
+    return true;
+  };
+
+  auto cleanupFail = [&]() {
+    if (st) {
+      sqlite3_finalize(st);
+      st = nullptr;
+    }
+    if (db) {
+      sqlite3_close(db);
+      db = nullptr;
+    }
+    try {
+      fs::remove(tmp);
+    } catch (...) {
+    }
+  };
+
+  if (!exec("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;")) {
+    cleanupFail();
+    return false;
+  }
+  if (!exec("CREATE TABLE utxo(txid BLOB NOT NULL, vout INTEGER NOT NULL, "
+            "key32 BLOB NOT NULL, value_sat INTEGER NOT NULL, "
+            "PRIMARY KEY(txid, vout));")) {
+    cleanupFail();
+    return false;
+  }
+  if (!exec("CREATE INDEX idx_utxo_key32 ON utxo(key32);")) {
+    cleanupFail();
+    return false;
+  }
+  if (sqlite3_prepare_v2(db,
+                         "INSERT INTO utxo(txid,vout,key32,value_sat) VALUES(?,?,?,?);",
+                         -1, &st, nullptr) != SQLITE_OK) {
+    cerr << "[WARN] sqlite prepare: " << sqlite3_errmsg(db) << "\n";
+    cleanupFail();
+    return false;
+  }
+  if (!exec("BEGIN;")) {
+    cleanupFail();
+    return false;
+  }
+  for (const auto &kv : utxoMap) {
+    uint32_t vout = 0;
+    memcpy(&vout, kv.first.data + 32, 4);
+    sqlite3_reset(st);
+    sqlite3_bind_blob(st, 1, kv.first.data, 32, SQLITE_STATIC);
+    sqlite3_bind_int64(st, 2, static_cast<sqlite3_int64>(vout));
+    sqlite3_bind_blob(st, 3, kv.second.key32.data(), 32, SQLITE_STATIC);
+    sqlite3_bind_int64(st, 4, static_cast<sqlite3_int64>(kv.second.value_sat));
+    if (sqlite3_step(st) != SQLITE_DONE) {
+      cerr << "[WARN] sqlite insert: " << sqlite3_errmsg(db) << "\n";
+      cleanupFail();
+      return false;
+    }
+  }
+  if (!exec("COMMIT;")) {
+    cleanupFail();
+    return false;
+  }
+  sqlite3_finalize(st);
+  st = nullptr;
+  sqlite3_close(db);
+  db = nullptr;
+
+  fs::rename(tmp, dbPath, ec);
+  if (ec) {
+    cerr << "[WARN] sqlite rename: " << ec.message() << "\n";
+    try {
+      fs::remove(tmp);
+    } catch (...) {
+    }
+    return false;
+  }
+  return true;
+}
+#endif
+
 static bool saveUtxoProgress(const string &filterDir,
                              const vector<pair<string, uint64_t>> &manifest,
-                             const unordered_map<UTXOKey, array<uint8_t, 32>, UTXOKeyHash> &utxoMap,
-                             uint32_t next_file_index) {
+                             const UtxoMap &utxoMap, uint32_t next_file_index) {
   return writeUtxoStateV2(filterDir + "/balance_utxo_progress.chk.tmp",
                           filterDir + "/balance_utxo_progress.chk", manifest,
                           utxoMap, next_file_index);
@@ -755,7 +884,7 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
     }
   }
 
-  unordered_map<UTXOKey, array<uint8_t, 32>, UTXOKeyHash> utxoMap;
+  UtxoMap utxoMap;
   utxoMap.reserve(200000000);
   size_t startFileIndex = 0;
 
@@ -912,6 +1041,7 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
         struct OutEntry {
           uint32_t vout;
           array<uint8_t, 32> key32;
+          uint64_t value_sat;
         };
         vector<OutEntry> outEntries;
 
@@ -954,7 +1084,7 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
               ok = true;
             }
             if (ok)
-              outEntries.push_back({(uint32_t)i, key32});
+              outEntries.push_back({(uint32_t)i, key32, val});
           }
         }
 
@@ -985,7 +1115,7 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
           UTXOKey key;
           memcpy(key.data, txid.data(), 32);
           memcpy(key.data + 32, &out.vout, 4);
-          utxoMap[key] = out.key32;
+          utxoMap[key] = UtxoMapVal{out.key32, out.value_sat};
           totalAdded++;
         }
       }
@@ -1026,9 +1156,9 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
        << " (added=" << totalAdded << " removed=" << totalRemoved << ")\n";
   cout << "Populating balance filters...\n";
 
-  for (auto &[key, key32] : utxoMap) {
+  for (auto &[key, ent] : utxoMap) {
     TKey kBuf;
-    memcpy(kBuf, key32.data(), 32);
+    memcpy(kBuf, ent.key32.data(), 32);
     uint64_t fH = SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
     for (int f = 0; f < NUM_BAL_FILTERS; ++f) {
       uint64_t h = fH & ((1ull << balFilterBitsExp[f]) - 1);
@@ -1036,6 +1166,16 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
                                         std::memory_order_relaxed);
     }
   }
+
+#if BTCSM_HAVE_SQLITE3
+  {
+    const string dbPath = filterDir + "/balance_utxo.sqlite";
+    if (exportBalanceUtxoSqlite(dbPath, utxoMap))
+      cout << "  Wrote " << dbPath << " (" << utxoMap.size() << " rows).\n";
+    else
+      cerr << "[WARN] Could not write balance_utxo.sqlite\n";
+  }
+#endif
 
   try {
     fs::remove(filterDir + "/balance_utxo.chk");
