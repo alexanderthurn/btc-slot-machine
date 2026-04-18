@@ -131,8 +131,8 @@
 
 <div class="filter-row">
     <span class="filter-lbl">Local Filter:</span>
-    <button class="cf-btn" data-mb="256"  data-bits="31" onclick="filterClick(256,31)">256M</button>
-    <button class="cf-btn" data-mb="1024" data-bits="33" onclick="filterClick(1024,33)">1G</button>
+    <button class="cf-btn" data-mb="512"   data-bits="32" onclick="filterClick(512,32)">512M</button>
+    <button class="cf-btn" data-mb="16384" data-bits="37" onclick="filterClick(16384,37)">16G</button>
 </div>
 
 <div class="idb-row" id="idbRow" style="display:none">
@@ -166,8 +166,12 @@
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function fmtMB(b) { return (b/1048576).toFixed(1)+' MB'; }
 function filterLabel(f) {
-    return f.replace('mb_bal.bin',' bal').replace('mb.bin','')
-             .replace('16384',' 16G').replace('1024',' 1G').replace('2048',' 2G').replace('256',' 256M').trim();
+    const m = f.match(/^(\d+)mb(_bal)?\.bin$/i);
+    if (!m) return f;
+    const mb = parseInt(m[1], 10);
+    const bal = m[2] ? ' bal' : '';
+    const sz = mb >= 1024 ? (mb / 1024) + 'G' : mb + 'M';
+    return sz + bal;
 }
 
 function logServerResults(results, totalMs, netMs, clientFound) {
@@ -329,7 +333,7 @@ async function refreshIDBState() {
     if (!keys.length) { delRow.style.display = 'none'; return; }
     delRow.style.display = '';
     delList.innerHTML = '';
-    const labels = { 256:'256M', 1024:'1G' };
+    const labels = { 512:'512M', 16384:'16G' };
     keys.sort((a,b)=>a-b).forEach(mb => {
         const btn = document.createElement('button');
         btn.className = 'del-btn';

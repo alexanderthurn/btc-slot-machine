@@ -1,8 +1,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <csignal>
 #include <cstdint>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -34,14 +34,14 @@ void signal_handler(int signal) {
 #undef main
 
 // Global Configurations for Multi-Tier Filters
-const int NUM_FILTERS = 3;
-const int filterSizesMB[] = {256, 1024, 16384};
-const int filterBitsExp[] = {31, 33, 37};
+const int NUM_FILTERS = 2;
+const int filterSizesMB[] = {512, 16384};
+const int filterBitsExp[] = {32, 37};
 
 // Balance Filters (addresses with unspent outputs only)
-const int NUM_BAL_FILTERS = 3;
-const int balFilterSizesMB[] = {256, 1024, 2048};
-const int balFilterBitsExp[] = {31,  33,   34};
+const int NUM_BAL_FILTERS = 2;
+const int balFilterSizesMB[] = {512, 16384};
+const int balFilterBitsExp[] = {32, 37};
 
 typedef std::atomic<uint64_t> ATTab;
 static_assert(
@@ -498,7 +498,7 @@ void processChunk(int chunk_index, bool debug) {
   }
 
   cout << "\nDone parsing chunk " << chunk_index << "!\n";
-  cout << "Saving all 3 filters to disk...\n";
+  cout << "Saving all master filters to disk...\n";
 
   for (int idx = 0; idx < NUM_FILTERS; ++idx) {
     string filename =
@@ -512,8 +512,10 @@ void processChunk(int chunk_index, bool debug) {
 
   cout << "Writing parsing log to " << outLogname << "...\n";
   ofstream logOut(outLogname);
-  if (datFiles.size() == 1000) {
+  if (keep_running && datFiles.size() == 1000) {
     logOut << "Completed\n";
+  } else if (!keep_running) {
+    logOut << "Aborted\n";
   } else {
     logOut << datFiles.size() << "\n";
   }
@@ -542,10 +544,284 @@ void processChunk(int chunk_index, bool debug) {
 // ==============================================================================
 // 4b. Balance Filter Builder (sequential UTXO pass over all block files)
 // ==============================================================================
+static const char UTXOCP_MAGIC[8] = {'B', 'T', 'U', 'T', 'C', 'P', '0', '1'};
+// v2 checkpoints embed per-file path+size manifests for incremental runs.
+static const uint32_t UTXOCP_VER = 2;
+
+// Re-merge this many trailing blk*.dat files when the tip changes (~safety margin
+// vs unstable chain tip; roughly >> 10 blocks per file). Increase if needed.
+static const int UTXO_TAIL_DAT_FILES = 2;
+
+static void buildDatFileManifest(const vector<string> &datFiles,
+                                 vector<pair<string, uint64_t>> &out) {
+  out.clear();
+  out.reserve(datFiles.size());
+  error_code ec;
+  for (const string &p : datFiles) {
+    uint64_t sz = fs::file_size(p, ec);
+    if (ec)
+      sz = 0;
+    out.push_back({p, sz});
+  }
+}
+
+static bool manifestPrefixEqual(const vector<pair<string, uint64_t>> &a,
+                                const vector<pair<string, uint64_t>> &b,
+                                size_t n) {
+  if (a.size() < n || b.size() < n)
+    return false;
+  for (size_t i = 0; i < n; ++i) {
+    if (a[i].first != b[i].first || a[i].second != b[i].second)
+      return false;
+  }
+  return true;
+}
+
+// Index of first path/size mismatch, or min size if lengths differ.
+static size_t firstManifestDiff(const vector<pair<string, uint64_t>> &a,
+                                const vector<pair<string, uint64_t>> &b) {
+  size_t n = min(a.size(), b.size());
+  for (size_t i = 0; i < n; ++i) {
+    if (a[i].first != b[i].first || a[i].second != b[i].second)
+      return i;
+  }
+  if (a.size() != b.size())
+    return n;
+  return string::npos;
+}
+
+static bool writeUtxoStateV2(const string &pathTmp, const string &pathFinal,
+                             const vector<pair<string, uint64_t>> &manifest,
+                             const unordered_map<UTXOKey, array<uint8_t, 32>, UTXOKeyHash> &utxoMap,
+                             uint32_t next_file_index) {
+  ofstream f(pathTmp, ios::binary | ios::trunc);
+  if (!f)
+    return false;
+  f.write(UTXOCP_MAGIC, 8);
+  f.write(reinterpret_cast<const char *>(&UTXOCP_VER), 4);
+  uint32_t nman = static_cast<uint32_t>(manifest.size());
+  f.write(reinterpret_cast<const char *>(&nman), 4);
+  for (const auto &e : manifest) {
+    uint16_t pl = static_cast<uint16_t>(min(e.first.size(), (size_t)65535));
+    f.write(reinterpret_cast<const char *>(&pl), 2);
+    if (pl)
+      f.write(e.first.data(), pl);
+    f.write(reinterpret_cast<const char *>(&e.second), 8);
+  }
+  f.write(reinterpret_cast<const char *>(&next_file_index), 4);
+  uint32_t pad = 0;
+  f.write(reinterpret_cast<const char *>(&pad), 4);
+  uint64_t n = utxoMap.size();
+  f.write(reinterpret_cast<const char *>(&n), 8);
+  for (const auto &kv : utxoMap) {
+    f.write(reinterpret_cast<const char *>(kv.first.data), 36);
+    f.write(reinterpret_cast<const char *>(kv.second.data()), 32);
+  }
+  f.close();
+  if (!f.good()) {
+    try {
+      fs::remove(pathTmp);
+    } catch (...) {
+    }
+    return false;
+  }
+  error_code ec;
+  fs::rename(pathTmp, pathFinal, ec);
+  return !ec;
+}
+
+static bool readUtxoManifestV2(ifstream &f, vector<pair<string, uint64_t>> &manifest) {
+  char mag[8];
+  f.read(mag, 8);
+  if (!f || memcmp(mag, UTXOCP_MAGIC, 8) != 0)
+    return false;
+  uint32_t ver;
+  f.read(reinterpret_cast<char *>(&ver), 4);
+  if (ver != UTXOCP_VER)
+    return false;
+  uint32_t nman;
+  f.read(reinterpret_cast<char *>(&nman), 4);
+  manifest.clear();
+  manifest.reserve(nman);
+  for (uint32_t i = 0; i < nman; ++i) {
+    uint16_t pl;
+    f.read(reinterpret_cast<char *>(&pl), 2);
+    string path(pl, '\0');
+    if (pl)
+      f.read(path.data(), pl);
+    uint64_t sz;
+    f.read(reinterpret_cast<char *>(&sz), 8);
+    if (!f)
+      return false;
+    manifest.push_back({std::move(path), sz});
+  }
+  return f.good();
+}
+
+static bool readUtxoMetaOnly(const string &path,
+                             vector<pair<string, uint64_t>> &manifest,
+                             uint32_t &out_next_file_index, uint64_t &out_n_entries) {
+  ifstream f(path, ios::binary);
+  if (!f)
+    return false;
+  if (!readUtxoManifestV2(f, manifest))
+    return false;
+  f.read(reinterpret_cast<char *>(&out_next_file_index), 4);
+  uint32_t pad;
+  f.read(reinterpret_cast<char *>(&pad), 4);
+  f.read(reinterpret_cast<char *>(&out_n_entries), 8);
+  if (!f || out_n_entries > 500000000ull)
+    return false;
+  f.seekg(static_cast<streamoff>(out_n_entries * 68), ios::cur);
+  return f.good();
+}
+
+static bool readUtxoStateV2(const string &path,
+                            vector<pair<string, uint64_t>> &manifest,
+                            uint32_t &out_next_file_index,
+                            unordered_map<UTXOKey, array<uint8_t, 32>, UTXOKeyHash> &utxoMap) {
+  ifstream f(path, ios::binary);
+  if (!f)
+    return false;
+  if (!readUtxoManifestV2(f, manifest))
+    return false;
+  f.read(reinterpret_cast<char *>(&out_next_file_index), 4);
+  uint32_t pad;
+  f.read(reinterpret_cast<char *>(&pad), 4);
+  uint64_t n;
+  f.read(reinterpret_cast<char *>(&n), 8);
+  if (!f || n > 500000000ull)
+    return false;
+  utxoMap.clear();
+  utxoMap.reserve(static_cast<size_t>(min<uint64_t>(n + 65536, 250000000)));
+  for (uint64_t i = 0; i < n; ++i) {
+    UTXOKey key{};
+    array<uint8_t, 32> key32{};
+    f.read(reinterpret_cast<char *>(key.data), 36);
+    f.read(reinterpret_cast<char *>(key32.data()), 32);
+    if (!f) {
+      utxoMap.clear();
+      return false;
+    }
+    utxoMap[key] = key32;
+  }
+  return f.good();
+}
+
+static bool saveUtxoProgress(const string &filterDir,
+                             const vector<pair<string, uint64_t>> &manifest,
+                             const unordered_map<UTXOKey, array<uint8_t, 32>, UTXOKeyHash> &utxoMap,
+                             uint32_t next_file_index) {
+  return writeUtxoStateV2(filterDir + "/balance_utxo_progress.chk.tmp",
+                          filterDir + "/balance_utxo_progress.chk", manifest,
+                          utxoMap, next_file_index);
+}
+
 void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
   cout << "\n== Building Balance Filters (UTXO sequential pass) ==\n";
 
-  cout << "Allocating ~3.25 GB for 3 Balance Filters...\n";
+  vector<string> datFiles;
+  for (const auto &entry : fs::directory_iterator(blocksDir)) {
+    if (entry.path().extension() == ".dat") {
+      string fn = entry.path().filename().string();
+      if (fn.length() == 12 && fn.substr(0, 3) == "blk") {
+        try {
+          stoi(fn.substr(3, 5));
+          datFiles.push_back(entry.path().string());
+        } catch (...) {
+        }
+      }
+    }
+  }
+  sort(datFiles.begin(), datFiles.end());
+  vector<pair<string, uint64_t>> curManifest;
+  buildDatFileManifest(datFiles, curManifest);
+  cout << "Sequential UTXO pass over " << datFiles.size() << " files...\n";
+
+  const string tipPath = filterDir + "/balance_utxo_tip.chk";
+  const string prefixPath = filterDir + "/balance_utxo_prefix.chk";
+  const string progPath = filterDir + "/balance_utxo_progress.chk";
+
+  // Fast path: nothing changed since last successful balance build.
+  if (fs::exists(tipPath)) {
+    vector<pair<string, uint64_t>> savedMan;
+    uint32_t savedNext = 0;
+    uint64_t nent = 0;
+    if (readUtxoMetaOnly(tipPath, savedMan, savedNext, nent) &&
+        savedMan == curManifest && savedNext == curManifest.size()) {
+      cout << "  Balance: blk manifest unchanged — skipping UTXO replay and "
+              "balance filter rebuild.\n";
+      return;
+    }
+  }
+
+  unordered_map<UTXOKey, array<uint8_t, 32>, UTXOKeyHash> utxoMap;
+  utxoMap.reserve(200000000);
+  size_t startFileIndex = 0;
+
+  vector<pair<string, uint64_t>> savedTipMan;
+  uint32_t tipNext = 0;
+  uint64_t tipN = 0;
+  if (readUtxoMetaOnly(tipPath, savedTipMan, tipNext, tipN) && !savedTipMan.empty()) {
+    size_t d = firstManifestDiff(savedTipMan, curManifest);
+    const size_t n = curManifest.size();
+    const size_t tailStart =
+        (n > (size_t)UTXO_TAIL_DAT_FILES) ? n - (size_t)UTXO_TAIL_DAT_FILES : 0;
+
+    if (d == string::npos) {
+      /* identical manifests handled above */
+    } else if (d < tailStart) {
+      cout << "  Balance: manifest changed before tail window — full UTXO "
+              "replay from genesis.\n";
+    } else if (d == savedTipMan.size() && curManifest.size() > savedTipMan.size()) {
+      uint32_t jn = 0;
+      if (!readUtxoStateV2(tipPath, savedTipMan, jn, utxoMap)) {
+        cout << "  Balance: could not load tip checkpoint — full replay.\n";
+      } else {
+        startFileIndex = d;
+        cout << "  Balance: incremental from new file index " << startFileIndex
+             << " (" << utxoMap.size() << " UTXO entries loaded).\n";
+      }
+    } else {
+      vector<pair<string, uint64_t>> prefMan;
+      uint32_t prefNext = 0;
+      if (!readUtxoStateV2(prefixPath, prefMan, prefNext, utxoMap)) {
+        cout << "  Balance: missing prefix checkpoint — full UTXO replay.\n";
+      } else if (prefNext != tailStart ||
+                 !manifestPrefixEqual(prefMan, curManifest, tailStart)) {
+        cout << "  Balance: prefix checkpoint stale — full UTXO replay.\n";
+        utxoMap.clear();
+      } else {
+        startFileIndex = tailStart;
+        cout << "  Balance: incremental from tail file index " << startFileIndex
+             << " (re-merge last " << UTXO_TAIL_DAT_FILES << " blk archives, "
+             << utxoMap.size() << " UTXO entries).\n";
+      }
+    }
+  }
+
+  // Mid-run resume (interrupt during UTXO pass)
+  if (utxoMap.empty() && fs::exists(progPath)) {
+    vector<pair<string, uint64_t>> pm;
+    uint32_t progNext = 0;
+    if (readUtxoStateV2(progPath, pm, progNext, utxoMap) && pm == curManifest) {
+      startFileIndex = static_cast<size_t>(progNext);
+      if (startFileIndex > datFiles.size())
+        startFileIndex = 0;
+      cout << "  Resumed UTXO progress file at blk index " << startFileIndex
+           << " / " << datFiles.size() << " (" << utxoMap.size() << " entries).\n";
+    } else {
+      utxoMap.clear();
+      startFileIndex = 0;
+    }
+  }
+
+  const size_t splitIdx =
+      datFiles.size() > (size_t)UTXO_TAIL_DAT_FILES
+          ? datFiles.size() - (size_t)UTXO_TAIL_DAT_FILES
+          : 0;
+
+  cout << "Allocating ~16.5 GB for 2 Balance Filters...\n";
   for (int idx = 0; idx < NUM_BAL_FILTERS; ++idx) {
     uint64_t arraySize = 1ull << (balFilterBitsExp[idx] - tabS);
     balLookups[idx] = new ATTab[arraySize];
@@ -553,41 +829,35 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
       balLookups[idx][j].store(0, std::memory_order_relaxed);
   }
 
-  vector<string> datFiles;
-  for (const auto &entry : fs::directory_iterator(blocksDir)) {
-    if (entry.path().extension() == ".dat") {
-      string fn = entry.path().filename().string();
-      if (fn.length() == 12 && fn.substr(0, 3) == "blk") {
-        try { stoi(fn.substr(3, 5)); datFiles.push_back(entry.path().string()); }
-        catch (...) {}
-      }
-    }
-  }
-  sort(datFiles.begin(), datFiles.end());
-  cout << "Sequential UTXO pass over " << datFiles.size() << " files...\n";
-
-  unordered_map<UTXOKey, array<uint8_t,32>, UTXOKeyHash> utxoMap;
-  utxoMap.reserve(200000000);
-
   uint64_t totalAdded = 0, totalRemoved = 0;
 
   auto appendLE32 = [](vector<uint8_t> &buf, uint32_t v) {
-    buf.push_back(v&0xFF); buf.push_back((v>>8)&0xFF);
-    buf.push_back((v>>16)&0xFF); buf.push_back((v>>24)&0xFF);
+    buf.push_back(v & 0xFF);
+    buf.push_back((v >> 8) & 0xFF);
+    buf.push_back((v >> 16) & 0xFF);
+    buf.push_back((v >> 24) & 0xFF);
   };
   auto appendLE64 = [](vector<uint8_t> &buf, uint64_t v) {
-    for (int i = 0; i < 8; i++) buf.push_back((v>>(i*8))&0xFF);
+    for (int i = 0; i < 8; i++)
+      buf.push_back((v >> (i * 8)) & 0xFF);
   };
 
-  for (const string &filepath : datFiles) {
-    if (!keep_running) break;
+  for (size_t fi = startFileIndex; fi < datFiles.size(); ++fi) {
+    if (!keep_running)
+      break;
+    const string &filepath = datFiles[fi];
     ifstream file(filepath, ios::binary);
-    if (!file) continue;
+    if (!file)
+      continue;
 
     uint32_t magic, blockSize;
-    while (keep_running && file.read(reinterpret_cast<char*>(&magic), 4)) {
-      if (magic != 0xD9B4BEF9) { file.seekg(-3, ios::cur); continue; }
-      if (!file.read(reinterpret_cast<char*>(&blockSize), 4)) break;
+    while (keep_running && file.read(reinterpret_cast<char *>(&magic), 4)) {
+      if (magic != 0xD9B4BEF9) {
+        file.seekg(-3, ios::cur);
+        continue;
+      }
+      if (!file.read(reinterpret_cast<char *>(&blockSize), 4))
+          break;
       auto blockStart = file.tellg();
       file.seekg(80, ios::cur);
       uint64_t txCount = readVarInt(file);
@@ -597,69 +867,94 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
         txRaw.reserve(512);
 
         uint32_t version;
-        file.read(reinterpret_cast<char*>(&version), 4);
+        file.read(reinterpret_cast<char *>(&version), 4);
         appendLE32(txRaw, version);
 
         bool isSW = false;
         auto cPos = file.tellg();
         uint8_t mCheck[2];
-        if (file.read(reinterpret_cast<char*>(mCheck), 2)) {
-          if (mCheck[0] == 0x00 && mCheck[1] == 0x01) isSW = true;
-          else file.seekg(cPos);
+        if (file.read(reinterpret_cast<char *>(mCheck), 2)) {
+          if (mCheck[0] == 0x00 && mCheck[1] == 0x01)
+            isSW = true;
+          else
+            file.seekg(cPos);
         }
 
         uint64_t inC = readVarIntBuf(file, txRaw);
 
-        struct InputRef { array<uint8_t,32> txid; uint32_t vout; };
+        struct InputRef {
+          array<uint8_t, 32> txid;
+          uint32_t vout;
+        };
         vector<InputRef> inputRefs;
 
         for (uint64_t i = 0; i < inC; ++i) {
-          array<uint8_t,32> prevTxid;
-          file.read(reinterpret_cast<char*>(prevTxid.data()), 32);
+          array<uint8_t, 32> prevTxid;
+          file.read(reinterpret_cast<char *>(prevTxid.data()), 32);
           txRaw.insert(txRaw.end(), prevTxid.begin(), prevTxid.end());
           uint32_t prevVout;
-          file.read(reinterpret_cast<char*>(&prevVout), 4);
+          file.read(reinterpret_cast<char *>(&prevVout), 4);
           appendLE32(txRaw, prevVout);
-          if (txIdx != 0) inputRefs.push_back({prevTxid, prevVout});
+          if (txIdx != 0)
+            inputRefs.push_back({prevTxid, prevVout});
           uint64_t sLen = readVarIntBuf(file, txRaw);
           vector<uint8_t> sc(sLen);
-          if (sLen > 0) file.read(reinterpret_cast<char*>(sc.data()), sLen);
+          if (sLen > 0)
+            file.read(reinterpret_cast<char *>(sc.data()), sLen);
           txRaw.insert(txRaw.end(), sc.begin(), sc.end());
-          uint32_t seq; file.read(reinterpret_cast<char*>(&seq), 4);
+          uint32_t seq;
+          file.read(reinterpret_cast<char *>(&seq), 4);
           appendLE32(txRaw, seq);
         }
 
         uint64_t outC = readVarIntBuf(file, txRaw);
 
-        struct OutEntry { uint32_t vout; array<uint8_t,32> key32; };
+        struct OutEntry {
+          uint32_t vout;
+          array<uint8_t, 32> key32;
+        };
         vector<OutEntry> outEntries;
 
         for (uint64_t i = 0; i < outC; ++i) {
           uint64_t val;
-          file.read(reinterpret_cast<char*>(&val), 8);
+          file.read(reinterpret_cast<char *>(&val), 8);
           appendLE64(txRaw, val);
           uint64_t sLen = readVarIntBuf(file, txRaw);
           vector<uint8_t> sc(sLen);
-          if (sLen > 0) file.read(reinterpret_cast<char*>(sc.data()), sLen);
+          if (sLen > 0)
+            file.read(reinterpret_cast<char *>(sc.data()), sLen);
           txRaw.insert(txRaw.end(), sc.begin(), sc.end());
           if (val > 0) {
-            array<uint8_t,32> key32 = {};
+            array<uint8_t, 32> key32 = {};
             bool ok = false;
-            if (sLen==25 && sc[0]==0x76 && sc[1]==0xa9 && sc[2]==0x14 && sc[23]==0x88 && sc[24]==0xac)
-              { memcpy(key32.data(), sc.data()+3, 20); ok=true; }
-            else if (sLen==23 && sc[0]==0xa9 && sc[1]==0x14 && sc[22]==0x87)
-              { memcpy(key32.data(), sc.data()+2, 20); ok=true; }
-            else if (sLen==22 && sc[0]==0x00 && sc[1]==0x14)
-              { memcpy(key32.data(), sc.data()+2, 20); ok=true; }
-            else if (sLen==34 && sc[0]==0x51 && sc[1]==0x20)
-              { memcpy(key32.data(), sc.data()+2, 32); ok=true; }
-            else if (sLen==34 && sc[0]==0x00 && sc[1]==0x20)
-              { memcpy(key32.data(), sc.data()+2, 32); ok=true; }
-            else if (sLen==35 && sc[0]==0x21 && sc[34]==0xac)
-              { auto h=hash160(sc.data()+1,33); memcpy(key32.data(),h.data(),20); ok=true; }
-            else if (sLen==67 && sc[0]==0x41 && sc[66]==0xac)
-              { auto h=hash160(sc.data()+1,65); memcpy(key32.data(),h.data(),20); ok=true; }
-            if (ok) outEntries.push_back({(uint32_t)i, key32});
+            if (sLen == 25 && sc[0] == 0x76 && sc[1] == 0xa9 && sc[2] == 0x14 &&
+                sc[23] == 0x88 && sc[24] == 0xac) {
+              memcpy(key32.data(), sc.data() + 3, 20);
+              ok = true;
+            } else if (sLen == 23 && sc[0] == 0xa9 && sc[1] == 0x14 &&
+                       sc[22] == 0x87) {
+              memcpy(key32.data(), sc.data() + 2, 20);
+              ok = true;
+            } else if (sLen == 22 && sc[0] == 0x00 && sc[1] == 0x14) {
+              memcpy(key32.data(), sc.data() + 2, 20);
+              ok = true;
+            } else if (sLen == 34 && sc[0] == 0x51 && sc[1] == 0x20) {
+              memcpy(key32.data(), sc.data() + 2, 32);
+              ok = true;
+            } else if (sLen == 34 && sc[0] == 0x00 && sc[1] == 0x20) {
+              memcpy(key32.data(), sc.data() + 2, 32);
+              ok = true;
+            } else if (sLen == 35 && sc[0] == 0x21 && sc[34] == 0xac) {
+              auto h = hash160(sc.data() + 1, 33);
+              memcpy(key32.data(), h.data(), 20);
+              ok = true;
+            } else if (sLen == 67 && sc[0] == 0x41 && sc[66] == 0xac) {
+              auto h = hash160(sc.data() + 1, 65);
+              memcpy(key32.data(), h.data(), 20);
+              ok = true;
+            }
+            if (ok)
+              outEntries.push_back({(uint32_t)i, key32});
           }
         }
 
@@ -667,32 +962,64 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
           for (uint64_t i = 0; i < inC; ++i) {
             uint64_t wItems = readVarInt(file);
             for (uint64_t w = 0; w < wItems; ++w) {
-              uint64_t iLen = readVarInt(file); file.seekg(iLen, ios::cur);
+              uint64_t iLen = readVarInt(file);
+              file.seekg(iLen, ios::cur);
             }
           }
         }
 
-        uint32_t locktime; file.read(reinterpret_cast<char*>(&locktime), 4);
+        uint32_t locktime;
+        file.read(reinterpret_cast<char *>(&locktime), 4);
         appendLE32(txRaw, locktime);
 
-        array<uint8_t,32> txid = dsha256(txRaw.data(), txRaw.size());
+        array<uint8_t, 32> txid = dsha256(txRaw.data(), txRaw.size());
 
         for (auto &inp : inputRefs) {
           UTXOKey key;
           memcpy(key.data, inp.txid.data(), 32);
-          memcpy(key.data+32, &inp.vout, 4);
-          if (utxoMap.erase(key)) totalRemoved++;
+          memcpy(key.data + 32, &inp.vout, 4);
+          if (utxoMap.erase(key))
+            totalRemoved++;
         }
         for (auto &out : outEntries) {
           UTXOKey key;
           memcpy(key.data, txid.data(), 32);
-          memcpy(key.data+32, &out.vout, 4);
+          memcpy(key.data + 32, &out.vout, 4);
           utxoMap[key] = out.key32;
           totalAdded++;
         }
       }
       file.seekg(blockStart + static_cast<streamoff>(blockSize));
     }
+    if (!keep_running) {
+      cout << "  [INFO] UTXO pass interrupted; resume from last checkpoint on next run.\n";
+      break;
+    }
+    if (!saveUtxoProgress(filterDir, curManifest, utxoMap,
+                          static_cast<uint32_t>(fi + 1))) {
+      cerr << "[WARN] Could not write UTXO progress after "
+           << fs::path(filepath).filename().string() << "\n";
+    } else {
+      cout << "  UTXO progress: finished file " << (fi + 1) << " / "
+           << datFiles.size() << "\n";
+    }
+    if (keep_running && splitIdx > 0 && fi + 1 == splitIdx) {
+      if (writeUtxoStateV2(filterDir + "/balance_utxo_prefix.chk.tmp",
+                           prefixPath, curManifest, utxoMap,
+                           static_cast<uint32_t>(splitIdx)))
+        cout << "  Wrote balance_utxo_prefix.chk (before tail replay window).\n";
+      else
+        cerr << "[WARN] Could not write balance_utxo_prefix.chk\n";
+    }
+  }
+
+  if (!keep_running) {
+    cout << "[INFO] Balance filter binaries not updated (UTXO pass incomplete).\n";
+    for (int idx = 0; idx < NUM_BAL_FILTERS; ++idx) {
+      delete[] balLookups[idx];
+      balLookups[idx] = nullptr;
+    }
+    return;
   }
 
   cout << "UTXO map: " << utxoMap.size() << " unspent outputs"
@@ -700,21 +1027,40 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
   cout << "Populating balance filters...\n";
 
   for (auto &[key, key32] : utxoMap) {
-    TKey kBuf; memcpy(kBuf, key32.data(), 32);
+    TKey kBuf;
+    memcpy(kBuf, key32.data(), 32);
     uint64_t fH = SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
     for (int f = 0; f < NUM_BAL_FILTERS; ++f) {
       uint64_t h = fH & ((1ull << balFilterBitsExp[f]) - 1);
-      balLookups[f][h >> tabS].fetch_or(((TTab)1 << (h & tabM)), std::memory_order_relaxed);
+      balLookups[f][h >> tabS].fetch_or(((TTab)1 << (h & tabM)),
+                                        std::memory_order_relaxed);
     }
   }
+
+  try {
+    fs::remove(filterDir + "/balance_utxo.chk");
+    fs::remove(filterDir + "/balance_utxo_progress.chk");
+  } catch (...) {
+  }
+
+  if (!writeUtxoStateV2(filterDir + "/balance_utxo_tip.chk.tmp", tipPath,
+                        curManifest, utxoMap,
+                        static_cast<uint32_t>(datFiles.size()))) {
+    cerr << "[WARN] Could not write balance_utxo_tip.chk\n";
+  } else {
+    cout << "  Wrote balance_utxo_tip.chk (for next incremental / skip run).\n";
+  }
+
   utxoMap.clear();
 
   cout << "Saving balance filters...\n";
   for (int idx = 0; idx < NUM_BAL_FILTERS; ++idx) {
-    string filename = filterDir + "/" + to_string(balFilterSizesMB[idx]) + "mb_bal.bin";
+    string filename =
+        filterDir + "/" + to_string(balFilterSizesMB[idx]) + "mb_bal.bin";
     uint64_t arraySize = 1ull << (balFilterBitsExp[idx] - tabS);
     ofstream out(filename, ios::binary);
-    out.write(reinterpret_cast<const char*>(balLookups[idx]), arraySize * sizeof(TTab));
+    out.write(reinterpret_cast<const char *>(balLookups[idx]),
+              arraySize * sizeof(TTab));
     cout << "  Saved " << balFilterSizesMB[idx] << "mb_bal.bin\n";
     delete[] balLookups[idx];
     balLookups[idx] = nullptr;
@@ -737,7 +1083,7 @@ void cmdParse(int arg_chunk_index, bool debug) {
   if (!fs::exists(filterDir))
     fs::create_directory(filterDir);
 
-  cout << "Allocating ~17 GB for all 3 Master Filters in RAM (Thread-safe "
+  cout << "Allocating ~16.5 GB for 2 Master Filters in RAM (Thread-safe "
           "Atomics)...\n";
   for (int idx = 0; idx < NUM_FILTERS; ++idx) {
     uint64_t arraySize = 1ull << (filterBitsExp[idx] - tabS);
@@ -792,8 +1138,7 @@ void cmdParse(int arg_chunk_index, bool debug) {
       if (fs::exists(outFilename)) {
         ifstream logIn(outFilename);
         string firstLine;
-        if (getline(logIn, firstLine) &&
-            firstLine.find("Completed") != string::npos) {
+        if (getline(logIn, firstLine) && firstLine == "Completed") {
           skipChunk = true;
         }
         logIn.close();
@@ -821,7 +1166,10 @@ void cmdParse(int arg_chunk_index, bool debug) {
   for (int idx = 0; idx < NUM_FILTERS; ++idx)
     delete[] preLookups[idx];
 
-  buildBalanceFilters(blocksDir, filterDir);
+  if (keep_running)
+    buildBalanceFilters(blocksDir, filterDir);
+  else
+    cout << "\n[INFO] Skipping balance filter build (parse was interrupted).\n";
 }
 
 // ==============================================================================
@@ -831,8 +1179,7 @@ void cmdBuild() {
   cout << "[INFO] The 'build' step is no longer necessary!\n";
   cout << "       The 'parse' command now natively injects into the completely "
           "dynamic,\n";
-  cout << "       multi-tiered 2^n (32MB, 64MB ... 2048MB) filter array "
-          "system.\n";
+  cout << "       two-tier (512MB + 16GB) filter files in filter/.\n";
   cout << "       Look inside your 'filter/' folder!\n";
 }
 
@@ -1266,8 +1613,8 @@ void printHelp() {
   cout << "  count                    Scans all blk*.dat files, counts address\n";
   cout << "                           types, unique addresses, transactions, BTC\n";
   cout << "                           moved. Saves per-file checkpoints to counts/.\n";
-  cout << "  test <address_or_hash>   Loads the 512MB filter into RAM and "
-          "verifies an address.\n";
+  cout << "  test <address_or_hash>   Loads filter/*.bin tiers and verifies an "
+          "address.\n";
   cout << "                           Accepts: Base58 Address (1A1zP...) or "
           "40-char Hex string.\n";
   cout << "\nExamples:\n";

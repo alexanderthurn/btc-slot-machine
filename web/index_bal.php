@@ -2,7 +2,7 @@
 // btc-slot-machine: balance filter lookup (addresses with unspent BTC only).
 // Same binary protocol as index.php — 5 bytes per lookup, 8-byte bitmask response.
 
-$fh   = fopen(__DIR__ . '/filter/2048mb_bal.bin', 'rb');
+$fh   = fopen(__DIR__ . '/filter/16384mb_bal.bin', 'rb');
 if (!$fh) { header('Content-Type: application/octet-stream'); echo pack('VV', 0, 0); exit; }
 $body = file_get_contents('php://input');
 $n    = (int)(strlen($body) / 5);

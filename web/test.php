@@ -28,12 +28,10 @@ $tabS = 6;
 $tabM = 63;
 
 $allFilters = [
-    ['file' => '16384mb.bin',   'bits' => 37, 'label' => 'all-addresses (32-byte key)'],
-    ['file' => '1024mb.bin',    'bits' => 33, 'label' => 'all-addresses (32-byte key)'],
-    ['file' => '256mb.bin',     'bits' => 31, 'label' => 'all-addresses (32-byte key)'],
-    ['file' => '2048mb_bal.bin','bits' => 34, 'label' => 'balance (32-byte key)'],
-    ['file' => '1024mb_bal.bin','bits' => 33, 'label' => 'balance (32-byte key)'],
-    ['file' => '256mb_bal.bin', 'bits' => 31, 'label' => 'balance (32-byte key)'],
+    ['file' => '16384mb.bin',    'bits' => 37, 'label' => 'all-addresses (32-byte key)'],
+    ['file' => '512mb.bin',      'bits' => 32, 'label' => 'all-addresses (32-byte key)'],
+    ['file' => '16384mb_bal.bin','bits' => 37, 'label' => 'balance (32-byte key)'],
+    ['file' => '512mb_bal.bin',  'bits' => 32, 'label' => 'balance (32-byte key)'],
 ];
 
 $results = [];

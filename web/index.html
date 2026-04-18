@@ -220,24 +220,19 @@
     <button id="btnSpin" onclick="doSpin()">SPIN</button>
     <label class="auto-label"><input type="checkbox" id="chkAuto" onchange="onAutoChange()"> auto</label>
     <button id="btnCopy" onclick="copyWords()">copy</button>
-    <span id="statusLine">No filter loaded — load one below or spin to auto-download the 32M filter.</span>
+    <span id="statusLine">No filter loaded — load one below or spin to auto-download the 512M filter.</span>
 </div>
 <div id="autoStatsRow"><span id="autoStats"></span></div>
 
-<div id="noFilterBanner">No filter loaded. Spinning will auto-download the 32M filter (~32 MB). Load a larger one below for better accuracy.</div>
+<div id="noFilterBanner">No filter loaded. Spinning will auto-download the 512M filter (~512 MB). Load the 16G filter below for best accuracy.</div>
 <div id="resultsBox" style="display:none"></div>
 
 <hr>
 
 <div class="filter-row">
     <span class="filter-lbl">Local Filter:</span>
-    <button class="cf-btn" data-mb="32"   data-bits="28" onclick="filterClick(32,28)">32M</button>
-    <button class="cf-btn" data-mb="64"   data-bits="29" onclick="filterClick(64,29)">64M</button>
-    <button class="cf-btn" data-mb="128"  data-bits="30" onclick="filterClick(128,30)">128M</button>
-    <button class="cf-btn" data-mb="256"  data-bits="31" onclick="filterClick(256,31)">256M</button>
-    <button class="cf-btn" data-mb="512"  data-bits="32" onclick="filterClick(512,32)">512M</button>
-    <button class="cf-btn" data-mb="1024" data-bits="33" onclick="filterClick(1024,33)">1G</button>
-    <button class="cf-btn" data-mb="2048" data-bits="34" onclick="filterClick(2048,34)">2G</button>
+    <button class="cf-btn" data-mb="512"   data-bits="32" onclick="filterClick(512,32)">512M</button>
+    <button class="cf-btn" data-mb="16384" data-bits="37" onclick="filterClick(16384,37)">16G</button>
 </div>
 
 <div class="idb-row" id="idbRow" style="display:none">
@@ -321,8 +316,8 @@ function serverPos(key) {
     return [Number(trunc >> 6n), Number(trunc & 63n)];
 }
 
-// Balance filter position (2G bal filter, bitsExp=34).
-const BAL_MASK = (1n << 34n) - 1n;
+// Balance filter position (16G bal filter, bitsExp=37).
+const BAL_MASK = (1n << 37n) - 1n;
 function balPos(key) {
     const trunc = fnv1a(key) & BAL_MASK;
     return [Number(trunc >> 6n), Number(trunc & 63n)];
@@ -407,7 +402,7 @@ async function refreshIDBState() {
     if (!keys.length) { delRow.style.display = 'none'; return; }
     delRow.style.display = '';
     delList.innerHTML = '';
-    const labels = { 32:'32M', 64:'64M', 128:'128M', 256:'256M', 512:'512M', 1024:'1G', 2048:'2G' };
+    const labels = { 512:'512M', 16384:'16G' };
     keys.sort(function(a,b){return a-b;}).forEach(function(mb) {
         const btn = document.createElement('button');
         btn.className = 'del-btn';
@@ -1140,7 +1135,7 @@ async function _doSpin(fixedWords, opts) {
     } else {
         document.getElementById('statusLine').textContent = 'Downloading 32M filter\u2026';
         if (!isAuto) log('no filter loaded \u2014 auto-downloading 32M filter\u2026', 'dim');
-        await filterClick(32, 28);
+        await filterClick(512, 32);
         if (cf.view) {
             if (!isAuto) log('filter ready \u2014 re-checking\u2026', 'dim');
             btn.disabled = false;
