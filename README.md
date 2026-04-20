@@ -35,12 +35,13 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
    - Used by the filter test page. Queries all available filter sizes in one request.
    - Returns per-filter results so you can compare accuracy across sizes.
 
-6. **Balance filters & UTXO SQLite** (built during `parse`):
+6. **Balance filters & UTXO SQLite**:
    - A second pass maintains a UTXO set for **balance-only** blooms (`*mb_bal.bin`) used by `index_bal.php`.
    - Checkpoints and resume state live under `parser/state/` (`balance_utxo_tip.chk`, etc.); format version **3** stores `key32` plus **`value_sat`** per coin. Progress (`balance_utxo_progress.chk`) is written on a **configurable interval** (default: every **10** finished block files, plus first/last/prefix split) to limit disk time; set `UTXO_PROGRESS_SAVE_EVERY_N_FILES` to `1` in `main.cpp` for the old “checkpoint every file” behavior.
    - When the parser is built **with** SQLite (`sqlite3` headers + `-lsqlite3`), it writes **`filter/balance_utxo.sqlite`** for deployment: one row per unspent tracked output (`txid`, `vout`, `key32`, `value_sat`). Internal temp/state files stay in `parser/state/`.
    - **`web/balance_lookup.php`** (PDO SQLite) returns JSON for a given **`?txid=`** (64 hex), optionally **`&vout=`** and **`&key32=`**. Copy or symlink `filter/balance_utxo.sqlite` next to the script under `web/filter/` if you deploy PHP separately from the parser output path.
-   - Optional fast bootstrap: `./main import_utxo_dump <csv>` can seed balance UTXO state from a chainstate dump CSV instead of replaying all `blk*.dat` files.
+   - Use chainstate bootstrap (`./main import_utxo_dump <csv>` or `bootstrap_utxo_from_chainstate.sh`) to seed/refresh balance UTXO state from a chainstate dump CSV.
+   - The old full blk replay UTXO pass was removed; balance artifacts are now maintained via chainstate dump import/bootstrap only.
 
 ## Installation & Setup
 
@@ -92,6 +93,7 @@ If running locally, compile from the `parser/` directory first:
 
 2. **`./main parse [--debug]`**
    Scans the `blocks/` directory, auto-detects all chunks, skips already-completed ones, and processes the rest. Safe to run repeatedly — re-running monthly picks up new blocks automatically. The `--debug` flag prints the first address found per type per file.
+   This command updates the main address filters (`*mb.bin`). Balance UTXO artifacts are refreshed via the chainstate bootstrap workflow.
 
    To manually run a specific chunk: **`./main parse <chunk_index> [--debug]`**
 
