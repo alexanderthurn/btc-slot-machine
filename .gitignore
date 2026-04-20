@@ -25,6 +25,7 @@ dist-ssr
 
 parser/blocks/
 parser/chunks/
+parser/state/
 web/filter/
 parser/main
 parser/counts/

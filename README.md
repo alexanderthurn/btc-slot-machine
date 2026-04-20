@@ -37,8 +37,8 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
 
 6. **Balance filters & UTXO SQLite** (built during `parse`):
    - A second pass maintains a UTXO set for **balance-only** blooms (`*mb_bal.bin`) used by `index_bal.php`.
-   - Checkpoints live under `filter/` (`balance_utxo_tip.chk`, etc.); format version **3** stores `key32` plus **`value_sat`** per coin. Progress (`balance_utxo_progress.chk`) is written on a **configurable interval** (default: every **10** finished block files, plus first/last/prefix split) to limit disk time; set `UTXO_PROGRESS_SAVE_EVERY_N_FILES` to `1` in `main.cpp` for the old “checkpoint every file” behavior.
-   - When the parser is built **with** SQLite (`sqlite3` headers + `-lsqlite3`), it also writes **`filter/balance_utxo.sqlite`**: one row per unspent tracked output (`txid`, `vout`, `key32`, `value_sat`). The Docker image includes this.
+   - Checkpoints and resume state live under `parser/state/` (`balance_utxo_tip.chk`, etc.); format version **3** stores `key32` plus **`value_sat`** per coin. Progress (`balance_utxo_progress.chk`) is written on a **configurable interval** (default: every **10** finished block files, plus first/last/prefix split) to limit disk time; set `UTXO_PROGRESS_SAVE_EVERY_N_FILES` to `1` in `main.cpp` for the old “checkpoint every file” behavior.
+   - When the parser is built **with** SQLite (`sqlite3` headers + `-lsqlite3`), it writes **`filter/balance_utxo.sqlite`** for deployment: one row per unspent tracked output (`txid`, `vout`, `key32`, `value_sat`). Internal temp/state files stay in `parser/state/`.
    - **`web/balance_lookup.php`** (PDO SQLite) returns JSON for a given **`?txid=`** (64 hex), optionally **`&vout=`** and **`&key32=`**. Copy or symlink `filter/balance_utxo.sqlite` next to the script under `web/filter/` if you deploy PHP separately from the parser output path.
 
 ## Installation & Setup
@@ -55,7 +55,7 @@ The easiest way to run the parser is via Docker. The container is fully signal-a
 cd parser && bash docker_run.sh
 ```
 
-This script pulls the latest code, rebuilds the image, and runs the parser with the correct volume mounts (`parser/blocks`, `parser/chunks`, `web/filter`).
+This script pulls the latest code, rebuilds the image, and runs the parser with the correct volume mounts (`parser/blocks`, `parser/chunks`, `parser/state`, `web/filter`).
 
 ### Aborting & Signals
 The Docker container and C++ process are fully signal-aware. If you need to stop a long-running parse:
@@ -132,7 +132,7 @@ export BLOCKCHAIN_DEST="./blocks/"
 The subshell `( )` keeps your working directory unchanged after the call. Override `BLOCKCHAIN_SOURCE` and `BLOCKCHAIN_DEST` to match your own paths.
 
 ## Balance UTXO skip path
-If `balance_utxo_tip.chk` already matches the current `blk*.dat` manifest, the parser **skips** the balance UTXO replay (including **SQLite** regeneration). To force a full balance rebuild (for example after upgrading checkpoint format or if you deleted only the `.sqlite` file), remove or invalidate the tip checkpoint so the manifest comparison fails, then run `parse` again.
+If `parser/state/balance_utxo_tip.chk` already matches the current `blk*.dat` manifest, the parser **skips** the balance UTXO replay (including **SQLite** regeneration). To force a full balance rebuild (for example after upgrading checkpoint format or if you deleted only the `.sqlite` file), remove or invalidate that tip checkpoint so the manifest comparison fails, then run `parse` again.
 
 ## Incremental Updates
 Re-run `./main parse` (or the Docker container) periodically to pick up new blocks:

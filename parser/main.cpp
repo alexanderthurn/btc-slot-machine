@@ -738,8 +738,11 @@ static bool readUtxoStateV2(const string &path,
 }
 
 #if BTCSM_HAVE_SQLITE3
-static bool exportBalanceUtxoSqlite(const string &dbPath, const UtxoMap &utxoMap) {
-  string tmp = dbPath + ".tmp";
+static bool exportBalanceUtxoSqlite(const string &stateDir, const string &filterDir,
+                                    const UtxoMap &utxoMap) {
+  const string stateDbPath = stateDir + "/balance_utxo.sqlite";
+  const string filterDbPath = filterDir + "/balance_utxo.sqlite";
+  const string tmp = stateDbPath + ".tmp";
   error_code ec;
   sqlite3_stmt *st = nullptr;
   sqlite3 *db = nullptr;
@@ -831,7 +834,7 @@ static bool exportBalanceUtxoSqlite(const string &dbPath, const UtxoMap &utxoMap
   sqlite3_close(db);
   db = nullptr;
 
-  fs::rename(tmp, dbPath, ec);
+  fs::rename(tmp, stateDbPath, ec);
   if (ec) {
     cerr << "[WARN] sqlite rename: " << ec.message() << "\n";
     try {
@@ -840,19 +843,25 @@ static bool exportBalanceUtxoSqlite(const string &dbPath, const UtxoMap &utxoMap
     }
     return false;
   }
+  fs::copy_file(stateDbPath, filterDbPath, fs::copy_options::overwrite_existing, ec);
+  if (ec) {
+    cerr << "[WARN] sqlite copy to filter dir: " << ec.message() << "\n";
+    return false;
+  }
   return true;
 }
 #endif
 
-static bool saveUtxoProgress(const string &filterDir,
+static bool saveUtxoProgress(const string &stateDir,
                              const vector<pair<string, uint64_t>> &manifest,
                              const UtxoMap &utxoMap, uint32_t next_file_index) {
-  return writeUtxoStateV2(filterDir + "/balance_utxo_progress.chk.tmp",
-                          filterDir + "/balance_utxo_progress.chk", manifest,
+  return writeUtxoStateV2(stateDir + "/balance_utxo_progress.chk.tmp",
+                          stateDir + "/balance_utxo_progress.chk", manifest,
                           utxoMap, next_file_index);
 }
 
-void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
+void buildBalanceFilters(const string &blocksDir, const string &filterDir,
+                         const string &stateDir) {
   cout << "\n== Building Balance Filters (UTXO sequential pass) ==\n";
 
   vector<string> datFiles;
@@ -873,9 +882,9 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
   buildDatFileManifest(datFiles, curManifest);
   cout << "Sequential UTXO pass over " << datFiles.size() << " files...\n";
 
-  const string tipPath = filterDir + "/balance_utxo_tip.chk";
-  const string prefixPath = filterDir + "/balance_utxo_prefix.chk";
-  const string progPath = filterDir + "/balance_utxo_progress.chk";
+  const string tipPath = stateDir + "/balance_utxo_tip.chk";
+  const string prefixPath = stateDir + "/balance_utxo_prefix.chk";
+  const string progPath = stateDir + "/balance_utxo_progress.chk";
 
   // Fast path: nothing changed since last successful balance build.
   if (fs::exists(tipPath)) {
@@ -1141,7 +1150,7 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
     cout << "  UTXO progress: finished file " << nextFileIdx << " / "
          << datFiles.size();
     if (saveProgress) {
-      if (!saveUtxoProgress(filterDir, curManifest, utxoMap, nextFileIdx)) {
+      if (!saveUtxoProgress(stateDir, curManifest, utxoMap, nextFileIdx)) {
         cerr << "\n[WARN] Could not write UTXO progress after "
              << fs::path(filepath).filename().string() << "\n";
       } else {
@@ -1151,7 +1160,7 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
       cout << "\n";
     }
     if (keep_running && splitIdx > 0 && fi + 1 == splitIdx) {
-      if (writeUtxoStateV2(filterDir + "/balance_utxo_prefix.chk.tmp",
+      if (writeUtxoStateV2(stateDir + "/balance_utxo_prefix.chk.tmp",
                            prefixPath, curManifest, utxoMap,
                            static_cast<uint32_t>(splitIdx)))
         cout << "  Wrote balance_utxo_prefix.chk (before tail replay window).\n";
@@ -1187,20 +1196,14 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
 #if BTCSM_HAVE_SQLITE3
   {
     const string dbPath = filterDir + "/balance_utxo.sqlite";
-    if (exportBalanceUtxoSqlite(dbPath, utxoMap))
+    if (exportBalanceUtxoSqlite(stateDir, filterDir, utxoMap))
       cout << "  Wrote " << dbPath << " (" << utxoMap.size() << " rows).\n";
     else
       cerr << "[WARN] Could not write balance_utxo.sqlite\n";
   }
 #endif
 
-  try {
-    fs::remove(filterDir + "/balance_utxo.chk");
-    fs::remove(filterDir + "/balance_utxo_progress.chk");
-  } catch (...) {
-  }
-
-  if (!writeUtxoStateV2(filterDir + "/balance_utxo_tip.chk.tmp", tipPath,
+  if (!writeUtxoStateV2(stateDir + "/balance_utxo_tip.chk.tmp", tipPath,
                         curManifest, utxoMap,
                         static_cast<uint32_t>(datFiles.size()))) {
     cerr << "[WARN] Could not write balance_utxo_tip.chk\n";
@@ -1239,6 +1242,9 @@ void cmdParse(int arg_chunk_index, bool debug) {
   string filterDir = "filter";
   if (!fs::exists(filterDir))
     fs::create_directory(filterDir);
+  string stateDir = "state";
+  if (!fs::exists(stateDir))
+    fs::create_directory(stateDir);
 
   cout << "Allocating ~16.5 GB for 2 Master Filters in RAM (Thread-safe "
           "Atomics)...\n";
@@ -1324,7 +1330,7 @@ void cmdParse(int arg_chunk_index, bool debug) {
     delete[] preLookups[idx];
 
   if (keep_running)
-    buildBalanceFilters(blocksDir, filterDir);
+    buildBalanceFilters(blocksDir, filterDir, stateDir);
   else
     cout << "\n[INFO] Skipping balance filter build (parse was interrupted).\n";
 }
