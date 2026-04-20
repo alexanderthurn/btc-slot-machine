@@ -37,7 +37,7 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
 
 6. **Balance filters & UTXO SQLite** (built during `parse`):
    - A second pass maintains a UTXO set for **balance-only** blooms (`*mb_bal.bin`) used by `index_bal.php`.
-   - Checkpoints live under `filter/` (`balance_utxo_tip.chk`, etc.); format version **3** stores `key32` plus **`value_sat`** per coin.
+   - Checkpoints live under `filter/` (`balance_utxo_tip.chk`, etc.); format version **3** stores `key32` plus **`value_sat`** per coin. Progress (`balance_utxo_progress.chk`) is written on a **configurable interval** (default: every **10** finished block files, plus first/last/prefix split) to limit disk time; set `UTXO_PROGRESS_SAVE_EVERY_N_FILES` to `1` in `main.cpp` for the old “checkpoint every file” behavior.
    - When the parser is built **with** SQLite (`sqlite3` headers + `-lsqlite3`), it also writes **`filter/balance_utxo.sqlite`**: one row per unspent tracked output (`txid`, `vout`, `key32`, `value_sat`). The Docker image includes this.
    - **`web/balance_lookup.php`** (PDO SQLite) returns JSON for a given **`?txid=`** (64 hex), optionally **`&vout=`** and **`&key32=`**. Copy or symlink `filter/balance_utxo.sqlite` next to the script under `web/filter/` if you deploy PHP separately from the parser output path.
 

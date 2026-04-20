@@ -567,6 +567,12 @@ static const size_t UTXOCP_ROW_BYTES = 36 + 32 + 8;
 // vs unstable chain tip; roughly >> 10 blocks per file). Increase if needed.
 static const int UTXO_TAIL_DAT_FILES = 2;
 
+// Write balance_utxo_progress.chk at most every N finished blk*.dat files (plus
+// first file, last file, and prefix split). Same checkpoint format as before;
+// larger N = much less I/O, but a crash may replay up to N−1 already-finished files.
+// Set to 1 to save after every file (original behavior).
+static const int UTXO_PROGRESS_SAVE_EVERY_N_FILES = 10;
+
 static void buildDatFileManifest(const vector<string> &datFiles,
                                  vector<pair<string, uint64_t>> &out) {
   out.clear();
@@ -1125,13 +1131,24 @@ void buildBalanceFilters(const string &blocksDir, const string &filterDir) {
       cout << "  [INFO] UTXO pass interrupted; resume from last checkpoint on next run.\n";
       break;
     }
-    if (!saveUtxoProgress(filterDir, curManifest, utxoMap,
-                          static_cast<uint32_t>(fi + 1))) {
-      cerr << "[WARN] Could not write UTXO progress after "
-           << fs::path(filepath).filename().string() << "\n";
+    const uint32_t nextFileIdx = static_cast<uint32_t>(fi + 1);
+    const int every = UTXO_PROGRESS_SAVE_EVERY_N_FILES;
+    const bool saveProgress =
+        (every <= 1) || (nextFileIdx == 1u) ||
+        (nextFileIdx == static_cast<uint32_t>(datFiles.size())) ||
+        (every > 1 && (nextFileIdx % static_cast<uint32_t>(every) == 0)) ||
+        (splitIdx > 0 && nextFileIdx == static_cast<uint32_t>(splitIdx));
+    cout << "  UTXO progress: finished file " << nextFileIdx << " / "
+         << datFiles.size();
+    if (saveProgress) {
+      if (!saveUtxoProgress(filterDir, curManifest, utxoMap, nextFileIdx)) {
+        cerr << "\n[WARN] Could not write UTXO progress after "
+             << fs::path(filepath).filename().string() << "\n";
+      } else {
+        cout << " [checkpoint]\n";
+      }
     } else {
-      cout << "  UTXO progress: finished file " << (fi + 1) << " / "
-           << datFiles.size() << "\n";
+      cout << "\n";
     }
     if (keep_running && splitIdx > 0 && fi + 1 == splitIdx) {
       if (writeUtxoStateV2(filterDir + "/balance_utxo_prefix.chk.tmp",
