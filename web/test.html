@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BTC Filter Test</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js"></script>
+    <script src="assets/bip39-wordlist.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -109,6 +111,58 @@
         .l-spd  { color: #335599; }
 
         .sec-lbl { font-size: 12px; color: #666; margin-bottom: 4px; }
+
+        .sqlite-box {
+            font-family: monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            background: #fafafa;
+            border: 1px solid #e8e8e8;
+            padding: 6px 8px;
+            min-height: 44px;
+            max-height: 180px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-bottom: 8px;
+        }
+
+        .mn-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+        .mn-row input { width: 80px; padding: 5px 6px; border: 1px solid #bbb; font-family: monospace; font-size: 12px; }
+        #mnWords {
+            width: 100%;
+            min-height: 72px;
+            border: 1px solid #bbb;
+            padding: 7px 9px;
+            font-family: monospace;
+            font-size: 12px;
+            resize: vertical;
+        }
+        #btnMnCheck {
+            padding: 6px 12px;
+            border: 1px solid #bbb;
+            background: #f5f5f5;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        #btnMnCheck:disabled { opacity: .5; cursor: not-allowed; }
+        .mn-out {
+            font-family: monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            background: #fafafa;
+            border: 1px solid #e8e8e8;
+            padding: 6px 8px;
+            min-height: 56px;
+            max-height: 260px;
+            overflow: auto;
+            white-space: pre;
+        }
+        #mnWarn { font-size: 12px; margin-top: 4px; margin-bottom: 6px; }
+        #mnWarn.ok { color: #1a7a1a; }
+        #mnWarn.warn { color: #b8860b; }
+        #mnWarn.err { color: #c33; }
     </style>
 </head>
 <body>
@@ -126,6 +180,9 @@
 </div>
 
 <div id="resultBox"><span style="color:#bbb">—</span></div>
+
+<div class="sec-lbl">SQLite (`balance_utxo.sqlite`)</div>
+<div id="sqliteBox" class="sqlite-box"><span style="color:#bbb">—</span></div>
 
 <hr>
 
@@ -156,6 +213,20 @@
 
 <hr>
 
+<div class="sec-lbl">Mnemonic Derivation (12/24 words)</div>
+<textarea id="mnWords" placeholder="paste 12 or 24 BIP39 words (space/newline separated)"></textarea>
+<div class="mn-row">
+    <span class="filter-lbl">start index</span>
+    <input id="mnStart" type="number" min="0" max="1000" value="0">
+    <span class="filter-lbl">count / path</span>
+    <input id="mnCount" type="number" min="1" max="20" value="3">
+    <button id="btnMnCheck" onclick="checkMnemonic()">Derive + Check</button>
+</div>
+<div id="mnWarn" class="warn">BIP39 validation warning only; derivation always runs.</div>
+<div id="mnOut" class="mn-out"><span style="color:#bbb">—</span></div>
+
+<hr>
+
 <div class="log-hdr">
     <span class="log-lbl">Log</span>
     <button class="log-clr" onclick="clearLog()">clear</button>
@@ -172,6 +243,37 @@ function filterLabel(f) {
     const bal = m[2] ? ' bal' : '';
     const sz = mb >= 1024 ? (mb / 1024) + 'G' : mb + 'M';
     return sz + bal;
+}
+
+function satToBTC(sat) {
+    return (Number(sat) / 1e8).toFixed(8);
+}
+
+async function fetchSqliteByKey(key32, limit = 20) {
+    const resp = await fetch(`balance_lookup.php?key32=${encodeURIComponent(key32)}&limit=${limit}&_cb=${Date.now()}`);
+    return resp.json();
+}
+
+function renderSqliteResult(key32, data, err) {
+    const box = document.getElementById('sqliteBox');
+    if (err) {
+        box.textContent = `error: ${err}`;
+        return;
+    }
+    if (!data || data.error || data.ok !== true) {
+        box.textContent = `error: ${(data && data.error) ? data.error : 'unknown sqlite response'}`;
+        return;
+    }
+    if (!data.count) {
+        box.textContent = `key32=${key32}\nrows=0`;
+        return;
+    }
+    let out = `key32=${key32}\nrows=${data.count} (limit ${data.limit})  total=${data.total_sat} sat (${satToBTC(data.total_sat)} BTC)\n`;
+    for (let i = 0; i < data.rows.length; i++) {
+        const r = data.rows[i];
+        out += `${i + 1}. ${r.txid_hex}:${r.vout}  ${r.value_sat} sat\n`;
+    }
+    box.textContent = out.trim();
 }
 
 function logServerResults(results, totalMs, netMs, clientFound) {
@@ -470,6 +572,7 @@ async function verifyInput() {
     if (!raw) return;
     const btn = document.getElementById('btnCheck');
     btn.disabled = true; btn.textContent = '...';
+    document.getElementById('sqliteBox').textContent = 'loading...';
 
     const newUrl = new URL(window.location.href);
     newUrl.searchParams.set('address', raw);
@@ -509,6 +612,9 @@ async function verifyInput() {
             .then(r => r.json())
             .then(d => ({ d, net: (performance.now()-serverT0).toFixed(0) }))
             .catch(e => ({ err: e.message }));
+        const sqlitePromise = fetchSqliteByKey(filterKey, 20)
+            .then(d => ({ d }))
+            .catch(e => ({ err: e.message }));
 
         if (cr !== null) {
             // client result is instant — show immediately
@@ -518,11 +624,13 @@ async function verifyInput() {
             addHistory(raw, cr.found);
 
             // then append server result to log once it arrives
-            serverPromise.then(({ d, net, err }) => {
+            serverPromise.then(async ({ d, net, err }) => {
                 if (err) { log(`server · error: ${err}`, 'err'); return; }
                 if (d.error) { log(`server · error: ${d.error}`, 'err'); return; }
                 logServerResults(d.results, d.time_total_ms, net, cr.found);
                 showResult(cr.found, filterKey, detectType, `${cf.sizeMB}mb`, cr.ms, d.time_total_ms, net);
+                const sq = await sqlitePromise;
+                renderSqliteResult(filterKey, sq.d, sq.err);
             });
         } else {
             // no client filter — wait for server only
@@ -534,9 +642,12 @@ async function verifyInput() {
             const best = d.results[0];
             showResult(best.found, filterKey, detectType, best.filter, null, d.time_total_ms, net);
             addHistory(raw, best.found);
+            const sq = await sqlitePromise;
+            renderSqliteResult(filterKey, sq.d, sq.err);
         }
     } catch (err) {
         setResult('err', err.message);
+        renderSqliteResult('', null, err.message);
         log(`error: ${err.message}`, 'err');
     }
     btn.disabled = false; btn.textContent = 'Check';
@@ -558,6 +669,208 @@ function setResult(cls, msg) {
     const box = document.getElementById('resultBox');
     box.className = cls;
     box.textContent = msg;
+}
+
+// ── MNEMONIC DERIVATION + FULL CHECK ──────────────────────────────────────────
+function bytesToHex(bytes) {
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function hexToBytes(hex) {
+    return new Uint8Array((hex.match(/.{2}/g) || []).map(x => parseInt(x, 16)));
+}
+
+const N_SECP256K1 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n;
+const EC = new elliptic.ec('secp256k1');
+
+function privToPub(privBytes) {
+    return new Uint8Array(EC.keyFromPrivate(privBytes).getPublic(true, 'array'));
+}
+function hash160(bytes) {
+    const wa = CryptoJS.enc.Hex.parse(bytesToHex(bytes));
+    return hexToBytes(CryptoJS.RIPEMD160(CryptoJS.SHA256(wa)).toString());
+}
+async function hmac512(key, data) {
+    const k = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']);
+    return new Uint8Array(await crypto.subtle.sign('HMAC', k, data));
+}
+async function mnemonicToSeedFromString(wordsStr) {
+    const enc = new TextEncoder();
+    const km = await crypto.subtle.importKey('raw', enc.encode(wordsStr), 'PBKDF2', false, ['deriveBits']);
+    return new Uint8Array(await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', hash: 'SHA-512', salt: enc.encode('mnemonic'), iterations: 2048 },
+        km,
+        512
+    ));
+}
+async function masterFromSeed(seed) {
+    const I = await hmac512(new TextEncoder().encode('Bitcoin seed'), seed);
+    return { key: I.slice(0, 32), chain: I.slice(32) };
+}
+async function childKey(parent, index, hardened) {
+    const idx = hardened ? (index | 0x80000000) >>> 0 : index;
+    const idxBuf = new Uint8Array(4);
+    new DataView(idxBuf.buffer).setUint32(0, idx, false);
+    const pub = privToPub(parent.key);
+    const data = hardened
+        ? new Uint8Array([0x00].concat(Array.from(parent.key)).concat(Array.from(idxBuf)))
+        : new Uint8Array(Array.from(pub).concat(Array.from(idxBuf)));
+    const I = await hmac512(parent.chain, data);
+    const childKeyBn =
+        (BigInt('0x' + bytesToHex(I.slice(0, 32))) + BigInt('0x' + bytesToHex(parent.key))) % N_SECP256K1;
+    return { key: hexToBytes(childKeyBn.toString(16).padStart(64, '0')), chain: I.slice(32) };
+}
+async function derivePath(seed, path) {
+    let node = await masterFromSeed(seed);
+    const parts = path.split('/').slice(1);
+    for (const p of parts) {
+        const hardened = p.endsWith("'");
+        node = await childKey(node, parseInt(p, 10), hardened);
+    }
+    return node;
+}
+
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+function base58Encode(bytes) {
+    if (!bytes.length) return '';
+    let n = BigInt('0x' + bytesToHex(bytes));
+    let r = '';
+    while (n > 0n) { r = B58[Number(n % 58n)] + r; n /= 58n; }
+    for (let i = 0; i < bytes.length; i++) { if (bytes[i] !== 0) break; r = '1' + r; }
+    return r;
+}
+function base58Check(payload) {
+    const p = new Uint8Array(payload);
+    const hex = bytesToHex(p);
+    const wa = CryptoJS.enc.Hex.parse(hex);
+    const chk = CryptoJS.SHA256(CryptoJS.SHA256(wa)).toString().slice(0, 8);
+    return base58Encode(new Uint8Array(Array.from(p).concat(Array.from(hexToBytes(chk)))));
+}
+
+const B32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+const B32_GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+function b32Polymod(v) { let c = 1; for (const d of v) { const t = c >> 25; c = ((c & 0x1ffffff) << 5) ^ d; for (let j = 0; j < 5; j++) if ((t >> j) & 1) c ^= B32_GEN[j]; } return c; }
+function b32HrpExpand(h) { const r = []; for (let i = 0; i < h.length; i++) r.push(h.charCodeAt(i) >> 5); r.push(0); for (let i = 0; i < h.length; i++) r.push(h.charCodeAt(i) & 31); return r; }
+function b32Checksum(hrp, data) { const v = b32HrpExpand(hrp).concat(data).concat([0, 0, 0, 0, 0, 0]); const pm = b32Polymod(v) ^ 1; return Array.from({ length: 6 }, (_, i) => (pm >> (5 * (5 - i))) & 31); }
+function convertBits(data, from, to, pad = true) { let acc = 0, bits = 0; const r = []; const maxv = (1 << to) - 1; for (const v of data) { acc = (acc << from) | v; bits += from; while (bits >= to) { bits -= to; r.push((acc >> bits) & maxv); } } if (pad && bits > 0) r.push((acc << (to - bits)) & maxv); return r; }
+function bech32P2wpkh(h160) { const prog = [0].concat(convertBits(Array.from(h160), 8, 5)); const cs = b32Checksum('bc', prog); return 'bc1' + prog.concat(cs).map(d => B32_CHARSET[d]).join(''); }
+function taprootOutputKey(pub33) {
+    const xOnly = pub33.slice(1, 33);
+    const tagH = CryptoJS.SHA256(CryptoJS.enc.Utf8.parse('TapTweak')).toString();
+    const twkH = CryptoJS.SHA256(CryptoJS.enc.Hex.parse(tagH + tagH + bytesToHex(xOnly))).toString();
+    const P = EC.keyFromPublic(pub33).getPublic();
+    const T = EC.keyFromPrivate(hexToBytes(twkH)).getPublic();
+    const Q = P.add(T);
+    return new Uint8Array(Q.getX().toArrayLike(Uint8Array, 'be', 32));
+}
+function bech32mP2tr(xOnly32) {
+    const prog = [1].concat(convertBits(Array.from(xOnly32), 8, 5));
+    const v = b32HrpExpand('bc').concat(prog).concat([0, 0, 0, 0, 0, 0]);
+    const pm = b32Polymod(v) ^ 0x2bc830a3;
+    const cs = Array.from({ length: 6 }, (_, i) => (pm >> (5 * (5 - i))) & 31);
+    return 'bc1' + prog.concat(cs).map(d => B32_CHARSET[d]).join('');
+}
+
+function addrP2PKH(privKey) { const h = hash160(privToPub(privKey)); const h160 = bytesToHex(h); return { addr: base58Check([0x00].concat(Array.from(h))), filterKey: h160.padEnd(64, '0') }; }
+function addrP2SHP2WPKH(privKey) { const h = hash160(privToPub(privKey)); const rs = new Uint8Array([0x00, 0x14].concat(Array.from(h))); const sh = hash160(rs); const shHex = bytesToHex(sh); return { addr: base58Check([0x05].concat(Array.from(sh))), filterKey: shHex.padEnd(64, '0') }; }
+function addrP2WPKH(privKey) { const h = hash160(privToPub(privKey)); const h160 = bytesToHex(h); return { addr: bech32P2wpkh(h), filterKey: h160.padEnd(64, '0') }; }
+function addrP2TR(privKey) { const pub = privToPub(privKey); const xOnly = taprootOutputKey(pub); const fk = bytesToHex(xOnly); return { addr: bech32mP2tr(xOnly), filterKey: fk }; }
+
+function parseServerHit(results, file) {
+    const r = (results || []).find(x => x.filter === file);
+    return r && !r.error ? !!r.found : null;
+}
+
+function validateMnemonicBip39(words) {
+    if (!Array.isArray(words) || (words.length !== 12 && words.length !== 24)) {
+        return { ok: false, reason: 'Expected exactly 12 or 24 words.' };
+    }
+    if (typeof BIP39_WORDLIST === 'undefined' || !Array.isArray(BIP39_WORDLIST)) {
+        return { ok: false, reason: 'BIP39 wordlist not loaded.' };
+    }
+    const idxs = [];
+    for (const w of words) {
+        const idx = BIP39_WORDLIST.indexOf(w);
+        if (idx < 0) return { ok: false, reason: `Unknown word: ${w}` };
+        idxs.push(idx);
+    }
+    const bits = idxs.map(i => i.toString(2).padStart(11, '0')).join('');
+    const csLen = words.length / 3;
+    const entLen = bits.length - csLen;
+    const entBits = bits.slice(0, entLen);
+    const csBits = bits.slice(entLen);
+    const entBytes = new Uint8Array(entLen / 8);
+    for (let i = 0; i < entBytes.length; i++) {
+        entBytes[i] = parseInt(entBits.slice(i * 8, i * 8 + 8), 2);
+    }
+    const entWa = CryptoJS.enc.Hex.parse(bytesToHex(entBytes));
+    const hashBits = CryptoJS.SHA256(entWa).toString()
+        .split('')
+        .map(c => parseInt(c, 16).toString(2).padStart(4, '0'))
+        .join('');
+    const want = hashBits.slice(0, csLen);
+    return {
+        ok: csBits === want,
+        reason: csBits === want ? 'BIP39 checksum valid.' : 'BIP39 checksum mismatch.',
+    };
+}
+
+async function checkMnemonic() {
+    const btn = document.getElementById('btnMnCheck');
+    const out = document.getElementById('mnOut');
+    const warn = document.getElementById('mnWarn');
+    const wordsRaw = document.getElementById('mnWords').value.trim().toLowerCase().replace(/\s+/g, ' ');
+    const start = Math.max(0, parseInt(document.getElementById('mnStart').value || '0', 10));
+    const count = Math.max(1, Math.min(20, parseInt(document.getElementById('mnCount').value || '3', 10)));
+    if (!wordsRaw) { out.textContent = 'Please enter 12 or 24 words.'; return; }
+    const words = wordsRaw.split(' ').filter(Boolean);
+    if (words.length !== 12 && words.length !== 24) { out.textContent = `Expected 12 or 24 words, got ${words.length}.`; return; }
+
+    const v = validateMnemonicBip39(words);
+    warn.className = v.ok ? 'ok' : 'warn';
+    warn.textContent = v.ok
+        ? `BIP39: valid (${words.length} words).`
+        : `BIP39 warning: ${v.reason} Derivation still runs.`;
+
+    btn.disabled = true;
+    out.textContent = 'Deriving seed and addresses...';
+    try {
+        const seed = await mnemonicToSeedFromString(wordsRaw);
+        const paths = [
+            { path: "m/44'/0'/0'/0", type: 'P2PKH', fn: addrP2PKH },
+            { path: "m/49'/0'/0'/0", type: 'P2SH-P2WPKH', fn: addrP2SHP2WPKH },
+            { path: "m/84'/0'/0'/0", type: 'P2WPKH', fn: addrP2WPKH },
+            { path: "m/86'/0'/0'/0", type: 'P2TR', fn: addrP2TR },
+        ];
+        let txt = `words=${words.length}  start=${start}  count=${count}\n`;
+        txt += 'type         i  bloom16g  bal16g  sqlite_rows  total_sat  address\n';
+        txt += '------------------------------------------------------------------------\n';
+        out.textContent = txt + '(running checks...)';
+
+        for (const p of paths) {
+            const acct = await derivePath(seed, p.path);
+            for (let n = start; n < start + count; n++) {
+                const child = await childKey(acct, n, false);
+                const info = p.fn(child.key);
+                const local = clientLookup(info.filterKey);
+                const sr = await fetch(`test.php?address_hex=${info.filterKey}&_cb=${Date.now()}`).then(r => r.json()).catch(() => null);
+                const sq = await fetchSqliteByKey(info.filterKey, 10).catch(() => null);
+                const b16 = sr && !sr.error ? parseServerHit(sr.results, '16384mb.bin') : null;
+                const bb16 = sr && !sr.error ? parseServerHit(sr.results, '16384mb_bal.bin') : null;
+                const sqliteRows = (sq && sq.ok) ? sq.count : 0;
+                const sqliteSat = (sq && sq.ok) ? sq.total_sat : 0;
+                const bloomText = b16 === null ? 'ERR' : (b16 ? 'HIT ' : 'MISS');
+                const balText = bb16 === null ? 'ERR' : (bb16 ? 'HIT ' : 'MISS');
+                txt += `${p.type.padEnd(11)} ${String(n).padStart(2)}  ${bloomText.padEnd(7)}  ${balText.padEnd(6)}  ${String(sqliteRows).padStart(11)}  ${String(sqliteSat).padStart(9)}  ${info.addr}\n`;
+                if (local) {
+                    log(`mnemonic ${p.type}[${n}] local ${local.found ? 'HIT' : 'MISS'} (${local.ms}ms)`, local.found ? 'ok' : 'dim');
+                }
+                out.textContent = txt;
+            }
+        }
+    } catch (e) {
+        out.textContent = `error: ${e.message}`;
+    }
+    btn.disabled = false;
 }
 
 function hasMempoolPage(s) {
