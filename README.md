@@ -1,6 +1,6 @@
 # Bitcoin Slot Machine - High-Performance Filter Pipeline
 
-This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), extracts 20-byte Hash160 address payloads, and intelligently builds a **multi-tiered 64-bit Bloom Filter Hierarchy (32 MB to 2048 MB)** for instantaneous, 0-RAM lookups on any conventional Web Server.
+This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), extracts 20-byte Hash160 address payloads, and builds high-capacity 64-bit Bloom filters (main + balance tiers) for instantaneous, 0-RAM web lookups.
 
 ## The Unified Command-Line Tool
 
@@ -20,7 +20,7 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
 3. **C++ Preprocessing (`main.cpp`)**:
    - Parallelized parsing using all available CPU cores via `std::thread`.
    - Thread-safe Bloom filter updates using `std::atomic<uint64_t>`.
-   - All 7 filter arrays (~4 GB total) kept in RAM for the entire run — loaded once at startup, saved after each chunk as a checkpoint.
+   - Main filter arrays are kept in RAM during parse and saved as `filter/*mb.bin` checkpoints.
    - Graceful termination (SIGINT/SIGTERM): finishes the current file and saves progress before exiting.
    - Incremental updates: re-running automatically skips fully completed chunks and only re-parses the last partial chunk (which may have grown since the last run) plus any new chunks.
    - Extracts 20-byte Hash160 payloads directly from Bitcoin `.dat` files (P2PKH, P2SH, P2WPKH).
@@ -36,8 +36,8 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
    - Returns per-filter results so you can compare accuracy across sizes.
 
 6. **Balance filters & UTXO SQLite**:
-   - A second pass maintains a UTXO set for **balance-only** blooms (`*mb_bal.bin`) used by `index_bal.php`.
-   - Checkpoints and resume state live under `parser/state/` (`balance_utxo_tip.chk`, etc.); format version **3** stores `key32` plus **`value_sat`** per coin. Progress (`balance_utxo_progress.chk`) is written on a **configurable interval** (default: every **10** finished block files, plus first/last/prefix split) to limit disk time; set `UTXO_PROGRESS_SAVE_EVERY_N_FILES` to `1` in `main.cpp` for the old “checkpoint every file” behavior.
+   - Balance artifacts are built from chainstate dump import/bootstrap (not from slow full blk replay).
+   - State/checkpoints live under `parser/state/` (`balance_utxo_tip.chk`, etc.); format version **3** stores `key32` plus **`value_sat`** per coin.
    - When the parser is built **with** SQLite (`sqlite3` headers + `-lsqlite3`), it writes **`filter/balance_utxo.sqlite`** for deployment: one row per unspent tracked output (`txid`, `vout`, `key32`, `value_sat`). Internal temp/state files stay in `parser/state/`.
    - **`web/balance_lookup.php`** (PDO SQLite) returns JSON for a given **`?txid=`** (64 hex), optionally **`&vout=`** and **`&key32=`**. Copy or symlink `filter/balance_utxo.sqlite` next to the script under `web/filter/` if you deploy PHP separately from the parser output path.
    - Use chainstate bootstrap (`./main import_utxo_dump <csv>` or `bootstrap_utxo_from_chainstate.sh`) to seed/refresh balance UTXO state from a chainstate dump CSV.
@@ -59,8 +59,8 @@ cd parser && bash docker_run.sh
 
 This script pulls the latest code, rebuilds the image, and runs the parser with the correct volume mounts (`parser/blocks`, `parser/chunks`, `parser/state`, `web/filter`).
 
-### Optional: Fast UTXO Bootstrap from Chainstate
-If you want to avoid a full blk replay for initial balance UTXO state, use the bootstrap helper:
+### Chainstate UTXO Bootstrap (recommended)
+Use this helper to build/refresh balance UTXO artifacts from a cloned chainstate:
 
 ```bash
 export CHAINSTATE_SOURCE="/mnt/laser/bitcoin/core/chainstate/"
@@ -153,8 +153,11 @@ export BLOCKCHAIN_DEST="./blocks/"
 
 The subshell `( )` keeps your working directory unchanged after the call. Override `BLOCKCHAIN_SOURCE` and `BLOCKCHAIN_DEST` to match your own paths.
 
-## Balance UTXO skip path
-If `parser/state/balance_utxo_tip.chk` already matches the current `blk*.dat` manifest, the parser **skips** the balance UTXO replay (including **SQLite** regeneration). To force a full balance rebuild (for example after upgrading checkpoint format or if you deleted only the `.sqlite` file), remove or invalidate that tip checkpoint so the manifest comparison fails, then run `parse` again.
+## Balance UTXO refresh
+`./main parse` updates main address filters.  
+Balance artifacts (`*mb_bal.bin`, `balance_utxo.sqlite`) are refreshed via:
+- `bash bootstrap_utxo_from_chainstate.sh`, or
+- `./main import_utxo_dump <csv_path>`
 
 ## Incremental Updates
 Re-run `./main parse` (or the Docker container) periodically to pick up new blocks:
