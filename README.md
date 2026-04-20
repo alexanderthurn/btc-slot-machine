@@ -40,6 +40,7 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
    - Checkpoints and resume state live under `parser/state/` (`balance_utxo_tip.chk`, etc.); format version **3** stores `key32` plus **`value_sat`** per coin. Progress (`balance_utxo_progress.chk`) is written on a **configurable interval** (default: every **10** finished block files, plus first/last/prefix split) to limit disk time; set `UTXO_PROGRESS_SAVE_EVERY_N_FILES` to `1` in `main.cpp` for the old “checkpoint every file” behavior.
    - When the parser is built **with** SQLite (`sqlite3` headers + `-lsqlite3`), it writes **`filter/balance_utxo.sqlite`** for deployment: one row per unspent tracked output (`txid`, `vout`, `key32`, `value_sat`). Internal temp/state files stay in `parser/state/`.
    - **`web/balance_lookup.php`** (PDO SQLite) returns JSON for a given **`?txid=`** (64 hex), optionally **`&vout=`** and **`&key32=`**. Copy or symlink `filter/balance_utxo.sqlite` next to the script under `web/filter/` if you deploy PHP separately from the parser output path.
+   - Optional fast bootstrap: `./main import_utxo_dump <csv>` can seed balance UTXO state from a chainstate dump CSV instead of replaying all `blk*.dat` files.
 
 ## Installation & Setup
 
@@ -56,6 +57,22 @@ cd parser && bash docker_run.sh
 ```
 
 This script pulls the latest code, rebuilds the image, and runs the parser with the correct volume mounts (`parser/blocks`, `parser/chunks`, `parser/state`, `web/filter`).
+
+### Optional: Fast UTXO Bootstrap from Chainstate
+If you want to avoid a full blk replay for initial balance UTXO state, use the bootstrap helper:
+
+```bash
+export CHAINSTATE_SOURCE="/mnt/laser/bitcoin/core/chainstate/"
+(cd btc-slot-machine/parser && bash bootstrap_utxo_from_chainstate.sh)
+```
+
+What it does:
+- clones `CHAINSTATE_SOURCE` into `parser/state/chainstate-clone/`
+- builds a Docker image for [`bitcoin-utxo-dump`](https://github.com/in3rsha/bitcoin-utxo-dump)
+- dumps CSV (`txid,vout,amount,type,script`) to `parser/state/utxodump.csv`
+- runs `./main import_utxo_dump ...` to generate `web/filter/*mb_bal.bin`, `web/filter/balance_utxo.sqlite`, and `parser/state/balance_utxo_tip.chk`
+
+Note: this workflow still keeps parser state in `parser/state/` and deployable files in `web/filter/`.
 
 ### Aborting & Signals
 The Docker container and C++ process are fully signal-aware. If you need to stop a long-running parse:
@@ -81,7 +98,10 @@ If running locally, compile from the `parser/` directory first:
 3. **`./main test <address_or_hash160>`**
    Instantly verifies if an address exists in the generated filters.
 
-4. **`./main count`**
+4. **`./main import_utxo_dump <csv_path>`**
+   Imports a chainstate UTXO dump CSV (for example from `bitcoin-utxo-dump`) into the parser's balance UTXO state and outputs.
+
+5. **`./main count`**
    Scans all `blk*.dat` files in `blocks/` and counts every output type, unique addresses, transactions, inputs with visible public keys, and total BTC ever moved. Uses all available CPU cores. Saves a per-file checkpoint to `counts/` (up to ~25 GB disk) so a re-run skips already-processed files. Prints a full summary at the end:
 
    ```

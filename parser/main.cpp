@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cstdint>
 #include <csignal>
 #include <cstdlib>
@@ -10,6 +11,7 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -1336,6 +1338,314 @@ void cmdParse(int arg_chunk_index, bool debug) {
 }
 
 // ==============================================================================
+// 4c. Command: import_utxo_dump (bootstrap from chainstate dump CSV)
+// ==============================================================================
+void cmdImportUtxoDump(const string &csvPath) {
+  ifstream in(csvPath);
+  if (!in) {
+    cerr << "[ERROR] Could not open CSV: " << csvPath << "\n";
+    return;
+  }
+
+  string blocksDir = "blocks";
+  string filterDir = "filter";
+  string stateDir = "state";
+  if (!fs::exists(filterDir))
+    fs::create_directory(filterDir);
+  if (!fs::exists(stateDir))
+    fs::create_directory(stateDir);
+
+  auto toLowerCopy = [](string s) {
+    transform(s.begin(), s.end(), s.begin(),
+              [](unsigned char c) { return static_cast<char>(tolower(c)); });
+    return s;
+  };
+  auto trim = [](const string &s) -> string {
+    size_t b = 0, e = s.size();
+    while (b < e && isspace(static_cast<unsigned char>(s[b])))
+      ++b;
+    while (e > b && isspace(static_cast<unsigned char>(s[e - 1])))
+      --e;
+    return s.substr(b, e - b);
+  };
+  auto splitCsv = [](const string &line) {
+    vector<string> out;
+    string cur;
+    bool inQuotes = false;
+    for (size_t i = 0; i < line.size(); ++i) {
+      char c = line[i];
+      if (c == '"') {
+        if (inQuotes && i + 1 < line.size() && line[i + 1] == '"') {
+          cur.push_back('"');
+          ++i;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (c == ',' && !inQuotes) {
+        out.push_back(cur);
+        cur.clear();
+      } else {
+        cur.push_back(c);
+      }
+    }
+    out.push_back(cur);
+    return out;
+  };
+  auto parseHexStrict = [&](const string &hex, vector<uint8_t> &out) {
+    out.clear();
+    string h = trim(hex);
+    if (h.size() >= 2 && h[0] == '0' && (h[1] == 'x' || h[1] == 'X'))
+      h = h.substr(2);
+    if (h.size() % 2 != 0)
+      return false;
+    out.reserve(h.size() / 2);
+    for (size_t i = 0; i < h.size(); i += 2) {
+      unsigned int b = 0;
+      char hi = h[i], lo = h[i + 1];
+      if (!isxdigit(static_cast<unsigned char>(hi)) ||
+          !isxdigit(static_cast<unsigned char>(lo)))
+        return false;
+      std::stringstream ss;
+      ss << std::hex << h.substr(i, 2);
+      ss >> b;
+      out.push_back(static_cast<uint8_t>(b & 0xFFu));
+    }
+    return true;
+  };
+
+  string header;
+  if (!getline(in, header)) {
+    cerr << "[ERROR] Empty CSV.\n";
+    return;
+  }
+  vector<string> cols = splitCsv(header);
+  unordered_map<string, size_t> idx;
+  for (size_t i = 0; i < cols.size(); ++i)
+    idx[toLowerCopy(trim(cols[i]))] = i;
+
+  auto getIdx = [&](const string &name) -> int {
+    auto it = idx.find(name);
+    return (it == idx.end()) ? -1 : static_cast<int>(it->second);
+  };
+
+  const int iTxid = getIdx("txid");
+  const int iVout = getIdx("vout");
+  const int iAmount = getIdx("amount");
+  const int iType = getIdx("type");
+  const int iScript = getIdx("script");
+  const int iAddress = getIdx("address");
+
+  if (iTxid < 0 || iVout < 0 || iAmount < 0) {
+    cerr << "[ERROR] CSV must contain txid,vout,amount columns.\n";
+    return;
+  }
+  if (iType < 0 && iScript < 0 && iAddress < 0) {
+    cerr << "[ERROR] CSV needs at least one of type/script/address columns.\n";
+    return;
+  }
+
+  UtxoMap utxoMap;
+  utxoMap.reserve(200000000);
+  uint64_t rows = 0, imported = 0, skipped = 0;
+
+  cout << "Importing UTXO dump from " << csvPath << " ...\n";
+
+  string line;
+  vector<uint8_t> txidBytes;
+  vector<uint8_t> scriptBytes;
+  while (keep_running && getline(in, line)) {
+    rows++;
+    if (line.empty())
+      continue;
+    vector<string> fields = splitCsv(line);
+    auto f = [&](int id) -> string {
+      return (id >= 0 && static_cast<size_t>(id) < fields.size()) ? trim(fields[id]) : "";
+    };
+
+    string txidHex = f(iTxid);
+    string voutStr = f(iVout);
+    string amountStr = f(iAmount);
+    string type = toLowerCopy(f(iType));
+    string scriptHex = f(iScript);
+    string address = f(iAddress);
+
+    if (!parseHexStrict(txidHex, txidBytes) || txidBytes.size() != 32) {
+      skipped++;
+      continue;
+    }
+
+    uint64_t amount = 0;
+    uint32_t vout = 0;
+    try {
+      amount = stoull(amountStr);
+      unsigned long v = stoul(voutStr);
+      if (v > 0xFFFFFFFFul) {
+        skipped++;
+        continue;
+      }
+      vout = static_cast<uint32_t>(v);
+    } catch (...) {
+      skipped++;
+      continue;
+    }
+    if (amount == 0) {
+      skipped++;
+      continue;
+    }
+
+    array<uint8_t, 32> key32{};
+    bool ok = false;
+    if (iScript >= 0 && parseHexStrict(scriptHex, scriptBytes)) {
+      if ((type == "p2pkh" || type == "p2sh" || type == "p2wpkh") && scriptBytes.size() == 20) {
+        memcpy(key32.data(), scriptBytes.data(), 20);
+        ok = true;
+      } else if ((type == "p2wsh" || type == "p2tr") && scriptBytes.size() == 32) {
+        memcpy(key32.data(), scriptBytes.data(), 32);
+        ok = true;
+      } else if (type == "p2pk" && (scriptBytes.size() == 33 || scriptBytes.size() == 65)) {
+        auto h = hash160(scriptBytes.data(), scriptBytes.size());
+        memcpy(key32.data(), h.data(), 20);
+        ok = true;
+      } else if (scriptBytes.size() == 25 && scriptBytes[0] == 0x76 && scriptBytes[1] == 0xa9 &&
+                 scriptBytes[2] == 0x14 && scriptBytes[23] == 0x88 && scriptBytes[24] == 0xac) {
+        memcpy(key32.data(), scriptBytes.data() + 3, 20);
+        ok = true;
+      } else if (scriptBytes.size() == 23 && scriptBytes[0] == 0xa9 && scriptBytes[1] == 0x14 &&
+                 scriptBytes[22] == 0x87) {
+        memcpy(key32.data(), scriptBytes.data() + 2, 20);
+        ok = true;
+      } else if (scriptBytes.size() == 22 && scriptBytes[0] == 0x00 && scriptBytes[1] == 0x14) {
+        memcpy(key32.data(), scriptBytes.data() + 2, 20);
+        ok = true;
+      } else if (scriptBytes.size() == 34 && scriptBytes[0] == 0x51 && scriptBytes[1] == 0x20) {
+        memcpy(key32.data(), scriptBytes.data() + 2, 32);
+        ok = true;
+      } else if (scriptBytes.size() == 34 && scriptBytes[0] == 0x00 && scriptBytes[1] == 0x20) {
+        memcpy(key32.data(), scriptBytes.data() + 2, 32);
+        ok = true;
+      } else if (scriptBytes.size() == 35 && scriptBytes[0] == 0x21 && scriptBytes[34] == 0xac) {
+        auto h = hash160(scriptBytes.data() + 1, 33);
+        memcpy(key32.data(), h.data(), 20);
+        ok = true;
+      } else if (scriptBytes.size() == 67 && scriptBytes[0] == 0x41 && scriptBytes[66] == 0xac) {
+        auto h = hash160(scriptBytes.data() + 1, 65);
+        memcpy(key32.data(), h.data(), 20);
+        ok = true;
+      }
+    }
+
+    if (!ok && iAddress >= 0 && !address.empty()) {
+      if (address[0] == '1' || address[0] == '3') {
+        vector<uint8_t> decoded = decodeBase58(address);
+        if (decoded.size() >= 25) {
+          memcpy(key32.data(), decoded.data() + 1, 20);
+          ok = true;
+        }
+      }
+    }
+
+    if (!ok) {
+      skipped++;
+      continue;
+    }
+
+    UTXOKey key{};
+    memcpy(key.data, txidBytes.data(), 32);
+    memcpy(key.data + 32, &vout, 4);
+    utxoMap[key] = UtxoMapVal{key32, amount};
+    imported++;
+
+    if ((rows % 1000000ull) == 0ull) {
+      cout << "  parsed " << rows << " rows, imported " << imported << "\n";
+    }
+  }
+
+  cout << "CSV read complete: rows=" << rows << " imported=" << imported
+       << " skipped=" << skipped << "\n";
+  if (utxoMap.empty()) {
+    cerr << "[ERROR] No importable UTXO rows found.\n";
+    return;
+  }
+
+  cout << "Allocating ~16.5 GB for 2 Balance Filters...\n";
+  for (int idxB = 0; idxB < NUM_BAL_FILTERS; ++idxB) {
+    uint64_t arraySize = 1ull << (balFilterBitsExp[idxB] - tabS);
+    balLookups[idxB] = new ATTab[arraySize];
+    for (uint64_t j = 0; j < arraySize; ++j)
+      balLookups[idxB][j].store(0, std::memory_order_relaxed);
+  }
+
+  cout << "Populating balance filters from imported UTXO map...\n";
+  for (auto &[key, ent] : utxoMap) {
+    TKey kBuf;
+    memcpy(kBuf, ent.key32.data(), 32);
+    uint64_t fH = SNVByte<0x00000100000001B3ull>(kBuf, 0xCBF29CE484222325ull);
+    for (int fidx = 0; fidx < NUM_BAL_FILTERS; ++fidx) {
+      uint64_t h = fH & ((1ull << balFilterBitsExp[fidx]) - 1);
+      balLookups[fidx][h >> tabS].fetch_or(((TTab)1 << (h & tabM)),
+                                           std::memory_order_relaxed);
+    }
+  }
+  for (int idxB = 0; idxB < NUM_BAL_FILTERS; ++idxB) {
+    string filename = filterDir + "/" + to_string(balFilterSizesMB[idxB]) + "mb_bal.bin";
+    uint64_t arraySize = 1ull << (balFilterBitsExp[idxB] - tabS);
+    ofstream out(filename, ios::binary | ios::trunc);
+    out.write(reinterpret_cast<const char *>(balLookups[idxB]),
+              arraySize * sizeof(TTab));
+    delete[] balLookups[idxB];
+    balLookups[idxB] = nullptr;
+    cout << "  Saved " << filename << "\n";
+  }
+
+#if BTCSM_HAVE_SQLITE3
+  if (exportBalanceUtxoSqlite(stateDir, filterDir, utxoMap))
+    cout << "  Wrote " << (filterDir + "/balance_utxo.sqlite")
+         << " (" << utxoMap.size() << " rows).\n";
+  else
+    cerr << "[WARN] Could not write balance_utxo.sqlite\n";
+#else
+  cout << "[INFO] sqlite3 header/lib not available: skipping balance_utxo.sqlite export.\n";
+#endif
+
+  vector<string> datFiles;
+  if (fs::exists(blocksDir)) {
+    for (const auto &entry : fs::directory_iterator(blocksDir)) {
+      if (entry.path().extension() == ".dat") {
+        string fn = entry.path().filename().string();
+        if (fn.length() == 12 && fn.substr(0, 3) == "blk") {
+          try {
+            stoi(fn.substr(3, 5));
+            datFiles.push_back(entry.path().string());
+          } catch (...) {
+          }
+        }
+      }
+    }
+  }
+  sort(datFiles.begin(), datFiles.end());
+  vector<pair<string, uint64_t>> manifest;
+  buildDatFileManifest(datFiles, manifest);
+
+  try {
+    fs::remove(stateDir + "/balance_utxo_progress.chk");
+    fs::remove(stateDir + "/balance_utxo_progress.chk.tmp");
+    fs::remove(stateDir + "/balance_utxo_prefix.chk");
+    fs::remove(stateDir + "/balance_utxo_prefix.chk.tmp");
+  } catch (...) {
+  }
+
+  const string tipPath = stateDir + "/balance_utxo_tip.chk";
+  if (!writeUtxoStateV2(stateDir + "/balance_utxo_tip.chk.tmp", tipPath, manifest,
+                        utxoMap, static_cast<uint32_t>(datFiles.size()))) {
+    cerr << "[WARN] Could not write " << tipPath << "\n";
+  } else {
+    cout << "  Wrote " << tipPath << " (next_file_index=" << datFiles.size() << ")\n";
+  }
+
+  cout << "UTXO bootstrap import complete.\n";
+}
+
+// ==============================================================================
 // 5. Command: Build
 // ==============================================================================
 void cmdBuild() {
@@ -1776,12 +2086,16 @@ void printHelp() {
   cout << "  count                    Scans all blk*.dat files, counts address\n";
   cout << "                           types, unique addresses, transactions, BTC\n";
   cout << "                           moved. Saves per-file checkpoints to counts/.\n";
+  cout << "  import_utxo_dump <csv>   Imports a chainstate UTXO CSV dump (e.g.\n";
+  cout << "                           bitcoin-utxo-dump output) into balance UTXO\n";
+  cout << "                           state + balance filters + sqlite.\n";
   cout << "  test <address_or_hash>   Loads filter/*.bin tiers and verifies an "
           "address.\n";
   cout << "                           Accepts: Base58 Address (1A1zP...) or "
           "40-char Hex string.\n";
   cout << "\nExamples:\n";
   cout << "  ./main parse 0 --debug\n";
+  cout << "  ./main import_utxo_dump state/utxodump.csv\n";
   cout << "  ./main build\n";
   cout << "  ./main test 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa\n";
 }
@@ -1820,6 +2134,12 @@ int main(int argc, char *argv[]) {
     cmdBuild();
   } else if (command == "count") {
     cmdCount();
+  } else if (command == "import_utxo_dump") {
+    if (argc < 3) {
+      cerr << "Missing CSV path. Usage: ./main import_utxo_dump <csv_path>\n";
+      return 1;
+    }
+    cmdImportUtxoDump(string(argv[2]));
   } else if (command == "test") {
     if (argc < 3) {
       cerr << "Missing address or hash element to test.\n";
