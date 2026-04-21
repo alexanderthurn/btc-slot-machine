@@ -207,8 +207,10 @@
 <div id="tabAddress" class="tab-panel active">
 <div class="input-row">
     <input type="text" id="valInput"
+           value="1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU"
            placeholder="address / hash160 / pubkey"
-           autocomplete="off" spellcheck="false">
+           autocomplete="off" spellcheck="false"
+           title="Default: well-known puzzle / demo address">
     <button id="btnCheck" onclick="verifyInput()">Check</button>
 </div>
 
@@ -280,6 +282,8 @@
 </div>
 
 <script>
+/** Default Address Check input when no ?address= / ?q= (well-known Puzzle transaction output). */
+const DEFAULT_ADDRESS_CHECK = '1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU';
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function fmtMB(b) { return (b/1048576).toFixed(1)+' MB'; }
 function filterLabel(f) {
@@ -1086,7 +1090,14 @@ window.addEventListener('DOMContentLoaded', async () => {
         log('ready', 'dim');
     }
 
-    if (q) { document.getElementById('valInput').value = q; verifyInput(); }
+    const vi = document.getElementById('valInput');
+    if (q) {
+        vi.value = q;
+        await verifyInput();
+    } else {
+        if (!vi.value.trim()) vi.value = DEFAULT_ADDRESS_CHECK;
+        await verifyInput();
+    }
 });
 </script>
 </body>

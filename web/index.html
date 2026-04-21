@@ -839,6 +839,9 @@ function urlParamToWords(param) {
 let currentWords = null;
 const slotLocks = Array(12).fill(false);
 const stateSpinCounts = Object.create(null);
+/** For exhaustive mode (fewer than 6 free words): ms when first counted spin started; frozen elapsed ms once 100%. */
+let exhaustiveRunStartByKey = Object.create(null);
+let exhaustiveCompletedElapsedByKey = Object.create(null);
 const LOCK_STATE_KEY = 'btc_slot_lock_state_v1';
 const SCAN_SETTINGS_KEY = 'btc_scan_settings_v1';
 
@@ -1100,6 +1103,8 @@ let pageStartTime  = Date.now();
 
 function resetSearchProgress() {
     for (const k in stateSpinCounts) delete stateSpinCounts[k];
+    exhaustiveRunStartByKey = Object.create(null);
+    exhaustiveCompletedElapsedByKey = Object.create(null);
     totalSpins = 0;
     totalAddresses = 0;
     spinsAtLastMatch = 0;
@@ -1288,6 +1293,13 @@ function formatDuration(sec) {
     return Math.round(sec / 31536000) + 'y';
 }
 
+function formatElapsedFromMs(ms) {
+    if (!isFinite(ms) || ms < 0) return '?';
+    const sec = ms / 1000;
+    if (sec < 1) return sec.toFixed(2) + 's';
+    return formatDuration(sec);
+}
+
 function getLockStateKey() {
     const parts = [];
     for (let i = 0; i < 12; i++) {
@@ -1300,6 +1312,10 @@ function getLockStateKey() {
 
 function registerSpinForCurrentState() {
     const k = getLockStateKey();
+    const free = 12 - slotLocks.filter(Boolean).length;
+    if (free < 6 && (stateSpinCounts[k] || 0n) === 0n && exhaustiveCompletedElapsedByKey[k] === undefined) {
+        exhaustiveRunStartByKey[k] = Date.now();
+    }
     stateSpinCounts[k] = (stateSpinCounts[k] || 0n) + 1n;
     totalSpins++;
 }
@@ -1403,7 +1419,16 @@ function updateAutoStats() {
         if (widthPct > 0 && widthPct < 1) fill.style.minWidth = '2px';
         else fill.style.minWidth = '0';
     }
-    document.getElementById('eduProgressText').textContent = 'Progress: ' + progressPct;
+    let progressMsg = 'Progress: ' + progressPct;
+    if (free < 6 && totalComb > 0n && checkedInState >= totalComb) {
+        if (exhaustiveCompletedElapsedByKey[stateKey] === undefined) {
+            const t0 = exhaustiveRunStartByKey[stateKey];
+            exhaustiveCompletedElapsedByKey[stateKey] = t0 !== undefined ? (Date.now() - t0) : null;
+        }
+        const elapsedMs = exhaustiveCompletedElapsedByKey[stateKey];
+        if (elapsedMs != null) progressMsg += ' \xb7 completed in ' + formatElapsedFromMs(elapsedMs);
+    }
+    document.getElementById('eduProgressText').textContent = progressMsg;
     updateMnemonicSpaceExplainer();
 }
 
