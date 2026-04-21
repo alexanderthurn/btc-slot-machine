@@ -161,6 +161,24 @@
         .res-server.unconfirmed { color: #b8860b; }
         .res-server.error { color: #c33; }
 
+        #singleSpinBox {
+            font-size: 12px;
+            border: 1px solid #ddd;
+            padding: 6px 8px;
+            margin-bottom: 8px;
+            background: #fafafa;
+            display: none;
+        }
+        .ss-head { font-family: monospace; color: #555; margin-bottom: 4px; }
+        .ss-words { font-family: monospace; color: #444; margin-bottom: 6px; word-break: break-word; }
+        .ss-row { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid #f0f0f0; padding: 2px 0; }
+        .ss-row:last-child { border-bottom: none; }
+        .ss-tag { font-family: monospace; font-size: 10px; color: #888; min-width: 76px; }
+        .ss-addr { font-family: monospace; font-size: 11px; flex: 1; min-width: 0; word-break: break-all; }
+        .ss-money { font-family: monospace; font-size: 10px; white-space: nowrap; }
+        .ss-money.yes { color: #1a7a1a; font-weight: 700; }
+        .ss-money.no { color: #888; }
+
         /* filter */
         .filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
         .filter-lbl { font-size: 12px; color: #666; white-space: nowrap; }
@@ -199,9 +217,6 @@
         /* autospin */
         .auto-label { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #444; cursor: pointer; white-space: nowrap; user-select: none; }
         .auto-label input { cursor: pointer; }
-        #autoStatsRow { font-family: monospace; font-size: 11px; color: #666; margin-bottom: 6px; display: none; }
-        #autoStats .stat-sep { color: #ccc; margin: 0 4px; }
-        #autoStats .stat-match { color: #1a7a1a; }
         #eduStatsBox {
             border: 1px solid #ddd;
             background: #fafafa;
@@ -212,6 +227,9 @@
             color: #444;
         }
         #eduStatsTop { margin-bottom: 4px; line-height: 1.55; }
+        #eduStatsAuto { margin-bottom: 4px; color: #666; line-height: 1.45; }
+        #eduStatsAuto .stat-sep { color: #ccc; margin: 0 4px; }
+        #eduStatsAuto .stat-match { color: #1a7a1a; }
         #eduProgressWrap { margin-top: 4px; }
         #eduProgressBar { height: 8px; background: #eee; border: 1px solid #ddd; border-radius: 3px; overflow: hidden; }
         #eduProgressFill { height: 100%; width: 0%; background: #2f8f4e; transition: width .2s linear; }
@@ -285,17 +303,16 @@
 </div>
 <div id="eduStatsBox">
     <div id="eduStatsTop">Waiting for first spin…</div>
+    <div id="eduStatsAuto"></div>
     <div id="eduProgressWrap">
         <div id="eduProgressBar"><div id="eduProgressFill"></div></div>
         <div id="eduProgressText">Progress: 0%</div>
     </div>
 </div>
-<div id="autoStatsRow"><span id="autoStats"></span></div>
 
 <div id="noFilterBanner">No filter loaded. Spinning will auto-download the 512M filter (~512 MB). Server confirmations always use 16G.</div>
 <div id="resultsBox" style="display:none"></div>
-
-<hr>
+<div id="singleSpinBox"></div>
 
 <div class="filter-row" id="filterRow">
     <span class="filter-lbl">Local Filter:</span>
@@ -315,8 +332,6 @@
     </div>
 </div>
 
-<hr>
-
 <div class="log-hdr" id="logHdr">
     <span class="log-lbl">Log</span>
     <button class="log-clr" onclick="clearLog()">clear</button>
@@ -324,7 +339,6 @@
 <div class="log-box" id="logConsole"></div>
 
 <div class="hits-section" id="hitsSection" style="display:none">
-    <hr>
     <div class="hits-hdr">
         <span class="hits-lbl">Recent Hits</span>
         <button class="hits-clr" onclick="clearHits()">clear</button>
@@ -508,12 +522,14 @@ function updateDebugUiVisibility() {
     const logBox = document.getElementById('logConsole');
     const filterRow = document.getElementById('filterRow');
     const idbRow = document.getElementById('idbRow');
+    const resultsBox = document.getElementById('resultsBox');
 
     if (!DEBUG_MODE) {
         if (logHdr) logHdr.style.display = 'none';
         if (logBox) logBox.style.display = 'none';
         if (filterRow) filterRow.style.display = cf.view ? 'none' : '';
         if (idbRow && cf.view) idbRow.style.display = 'none';
+        if (resultsBox) resultsBox.style.display = 'none';
         return;
     }
 
@@ -984,6 +1000,9 @@ let totalSpins       = 0;
 let totalAddresses   = 0;
 let spinsAtLastMatch = 0;
 let lastMatchTime    = null;
+let lastSpinHadFundedMatch = false;
+let lastSpinExhaustiveDone = false;
+let lastSpinFundedWords = '';
 const pageStartTime  = Date.now();
 
 // Pending local hits waiting for a batched server check
@@ -1039,6 +1058,11 @@ async function flushPendingHits() {
             for (let i = 0; i < groups.length; i++) {
                 const savedHasUtxo = await saveHitToHistory(groups[i].words, groups[i].found);
                 if (savedHasUtxo) savedFunded++;
+                if (savedHasUtxo && autoSpinning) {
+                    autoSpinning = false;
+                    document.getElementById('chkAuto').checked = false;
+                    document.getElementById('statusLine').textContent = 'Stopped: funded match found: ' + groups[i].words.join(' ');
+                }
                 spinsAtLastMatch = totalSpins;
                 lastMatchTime = Date.now();
                 updateAutoStats();
@@ -1163,6 +1187,33 @@ function registerSpinForCurrentState() {
     totalSpins++;
 }
 
+function isCurrentStateExhausted() {
+    const free = 12 - slotLocks.filter(Boolean).length;
+    if (free >= 6) return false;
+    const totalComb = powBigInt(2048, free);
+    const checkedInState = stateSpinCounts[getLockStateKey()] || 0n;
+    return checkedInState >= totalComb;
+}
+
+function renderSingleSpinResults(words, rows) {
+    const box = document.getElementById('singleSpinBox');
+    if (!box) return;
+    if (!rows || !rows.length) { box.style.display = 'none'; return; }
+    const moneyCount = rows.filter(function(r) { return r.money === 'yes'; }).length;
+    let html = '<div class="ss-head">Generated ' + rows.length + ' addresses · with money: ' + moneyCount + '</div>';
+    html += '<div class="ss-words">' + esc(words.join(' ')) + '</div>';
+    for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        html += '<div class="ss-row">'
+            + '<span class="ss-tag">' + esc(r.type) + '[' + r.index + ']</span>'
+            + '<span class="ss-addr">' + esc(r.addr) + '</span>'
+            + '<span class="ss-money ' + (r.money === 'yes' ? 'yes' : 'no') + '">' + (r.money === 'yes' ? 'money' : 'no money') + '</span>'
+            + '</div>';
+    }
+    box.innerHTML = html;
+    box.style.display = '';
+}
+
 function buildSpinWords(fixedWords) {
     if (fixedWords) return { words: fixedWords.slice(), exhaustive: false };
 
@@ -1214,8 +1265,8 @@ function updateAutoStats() {
             + '</span>';
     }
 
-    document.getElementById('autoStats').innerHTML = html;
-    document.getElementById('autoStatsRow').style.display = 'block';
+    const eduAuto = document.getElementById('eduStatsAuto');
+    if (eduAuto) eduAuto.innerHTML = html;
 
     const locked = slotLocks.filter(Boolean).length;
     const free = 12 - locked;
@@ -1262,13 +1313,25 @@ async function onAutoChange() {
     lastFlushTime = Date.now();
     while (autoSpinning) {
         await doSpin();
+        if (lastSpinHadFundedMatch) {
+            autoSpinning = false;
+            document.getElementById('chkAuto').checked = false;
+            document.getElementById('statusLine').textContent = 'Stopped: funded match found' + (lastSpinFundedWords ? ': ' + lastSpinFundedWords : '.');
+            break;
+        }
+        if (lastSpinExhaustiveDone) {
+            autoSpinning = false;
+            document.getElementById('chkAuto').checked = false;
+            document.getElementById('statusLine').textContent = 'Stopped: exhaustive search completed for current lock state.';
+            break;
+        }
         if (pendingHits.length >= FLUSH_BATCH_SIZE ||
             (pendingHits.length > 0 && Date.now() - lastFlushTime >= FLUSH_INTERVAL_MS)) {
             flushPendingHits(); // fire-and-forget — don't block spinning on HTTP round trip
         }
     }
     await flushPendingHits();
-    document.getElementById('resultsBox').style.display = 'block';
+    document.getElementById('resultsBox').style.display = DEBUG_MODE ? 'block' : 'none';
     document.getElementById('btnCopy').style.display = '';
 }
 
@@ -1296,6 +1359,9 @@ async function doSpin(fixedWords, opts) {
     catch(e) { log('ERROR: ' + e.message + (e.stack ? '\n' + e.stack.split('\n')[1] : ''), 'err'); document.getElementById('btnSpin').disabled = false; return false; }
 }
 async function _doSpin(fixedWords, opts) {
+    lastSpinHadFundedMatch = false;
+    lastSpinExhaustiveDone = false;
+    lastSpinFundedWords = '';
     const serverOnly = !!(opts && opts.serverOnly);
     const isAuto = autoSpinning; // capture now — consistent for the whole spin
     const btn = document.getElementById('btnSpin');
@@ -1303,6 +1369,8 @@ async function _doSpin(fixedWords, opts) {
     if (!isAuto) document.getElementById('logConsole').innerHTML = '';
     document.getElementById('resultsBox').style.display = 'none';
     document.getElementById('btnCopy').style.display = 'none';
+    const singleSpinBox = document.getElementById('singleSpinBox');
+    if (isAuto && singleSpinBox) singleSpinBox.style.display = 'none';
 
     // 1. Generate (or restore) mnemonic
     const spinPlan = buildSpinWords(fixedWords);
@@ -1333,10 +1401,19 @@ async function _doSpin(fixedWords, opts) {
         if (!isAuto) log('no derivation path selected', 'err');
         if (isAuto) setAutoSpin(false);
         btn.disabled = false;
+        if (!isAuto) renderSingleSpinResults(words, []);
         return false;
     }
 
     const found = [];
+    const collectDerived = !isAuto;
+    const derivedRows = collectDerived ? [] : null;
+    function trackDerived(type, idx, addr) {
+        if (!collectDerived) return null;
+        const row = { type: type, index: idx, addr: addr, money: 'no' };
+        derivedRows.push(row);
+        return row;
+    }
     let checked = 0, serverFilterLabel = null;
     const tAddr = performance.now();
 
@@ -1350,8 +1427,9 @@ async function _doSpin(fixedWords, opts) {
             for (let n = 0; n < perPathCount; n++) {
                 const child = await childKey(acct, n, false);
                 const {addr, h160, filterKey} = fn(child.key);
+                const rowRef = trackDerived(type, n, addr);
                 checked++;
-                found.push({type, addr, h160, filterKey, serverFound: null});
+                found.push({type, addr, h160, filterKey, serverFound: null, rowRef});
             }
         }
         try {
@@ -1359,17 +1437,27 @@ async function _doSpin(fixedWords, opts) {
             const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.filterKey); })) });
             const buf  = new Uint32Array(await resp.arrayBuffer());
             serverFilterLabel = '16G';
-            for (let i = 0; i < found.length; i++) found[i].serverFound = readBit(buf, i) === 1;
+            for (let i = 0; i < found.length; i++) {
+                found[i].serverFound = readBit(buf, i) === 1;
+                if (found[i].rowRef) found[i].rowRef.money = 'no';
+            }
             const hits = found.filter(function(f) { return f.serverFound; });
             if (!isAuto) log('server: ' + hits.length + ' confirmed / ' + found.length + ' checked \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', hits.length ? 'ok' : 'data');
             if (hits.length > 0) {
                 await checkBalanceFilter(hits);
                 const balHits = hits.filter(function(f) { return f.balFound; }).length;
+                for (let i = 0; i < hits.length; i++) if (hits[i].rowRef) hits[i].rowRef.money = hits[i].balFound === true ? 'yes' : 'no';
                 if (!isAuto) log('balance filter: ' + balHits + '/' + hits.length + ' have unspent BTC', balHits ? 'ok' : 'data');
             }
             // keep only server hits in found for display
             found.splice(0, found.length, ...hits);
-            if (hits.length > 0) await saveHitToHistory(words, hits);
+            if (hits.length > 0) {
+                const saved = await saveHitToHistory(words, hits);
+                if (saved) {
+                    lastSpinHadFundedMatch = true;
+                    lastSpinFundedWords = words.join(' ');
+                }
+            }
         } catch(e) { log('server error: ' + e.message, 'err'); }
     } else if (cf.view) {
         // Phase 1: check first few entries of first selected path — bail early if no hit
@@ -1378,10 +1466,11 @@ async function _doSpin(fixedWords, opts) {
         for (let n = 0; n < phase1Count; n++) {
             const child = await childKey(acct0, n, false);
             const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
+            const rowRef = trackDerived(pathDefs[0].type, n, addr);
             checked++;
             const res = clientLookup(filterKey);
             if (res && res.found) {
-                found.push({type: pathDefs[0].type, addr, h160, filterKey, serverFound: null});
+                found.push({type: pathDefs[0].type, addr, h160, filterKey, serverFound: null, rowRef});
                 if (!isAuto) log('HIT ' + pathDefs[0].type + ' [0/' + n + '] ' + addr, 'ok');
             }
         }
@@ -1391,7 +1480,9 @@ async function _doSpin(fixedWords, opts) {
             btn.disabled = false;
             registerSpinForCurrentState();
             totalAddresses += checked;
+            lastSpinExhaustiveDone = isCurrentStateExhausted();
             updateAutoStats();
+            if (!isAuto) renderSingleSpinResults(words, derivedRows);
             return false;
         }
 
@@ -1402,7 +1493,10 @@ async function _doSpin(fixedWords, opts) {
                 const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.filterKey); })) });
                 const buf  = new Uint32Array(await resp.arrayBuffer());
                 serverFilterLabel = '16G';
-                for (let i = 0; i < found.length; i++) found[i].serverFound = readBit(buf, i) === 1;
+                for (let i = 0; i < found.length; i++) {
+                    found[i].serverFound = readBit(buf, i) === 1;
+                    if (found[i].rowRef && found[i].serverFound !== true) found[i].rowRef.money = 'no';
+                }
                 log('quick server check \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', 'dim');
             } catch(e) { log('server error: ' + e.message, 'err'); }
             if (!found.some(function(f) { return f.serverFound === true; })) {
@@ -1417,10 +1511,11 @@ async function _doSpin(fixedWords, opts) {
                 for (let n = phase1Count; n < perPathCount; n++) {
                     const child = await childKey(acct0, n, false);
                     const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
+                    const rowRef = trackDerived(pathDefs[0].type, n, addr);
                     checked++;
                     const res = clientLookup(filterKey);
                     if (res && res.found) {
-                        found.push({type: pathDefs[0].type, addr, h160, filterKey, serverFound: null});
+                        found.push({type: pathDefs[0].type, addr, h160, filterKey, serverFound: null, rowRef});
                         log('HIT ' + pathDefs[0].type + ' [0/' + n + '] ' + addr, 'ok');
                     }
                 }
@@ -1430,10 +1525,11 @@ async function _doSpin(fixedWords, opts) {
                     for (let n = 0; n < perPathCount; n++) {
                         const child = await childKey(acct, n, false);
                         const {addr, h160, filterKey} = fn(child.key);
+                        const rowRef = trackDerived(type, n, addr);
                         checked++;
                         const res = clientLookup(filterKey);
                         if (res && res.found) {
-                            found.push({type, addr, h160, filterKey, serverFound: null});
+                            found.push({type, addr, h160, filterKey, serverFound: null, rowRef});
                             log('HIT ' + type + ' [' + pi + '/' + n + '] ' + addr, 'ok');
                         }
                     }
@@ -1446,6 +1542,7 @@ async function _doSpin(fixedWords, opts) {
                     serverFilterLabel = '16G';
                     for (let i = 0; i < found.length; i++) {
                         found[i].serverFound = readBit(buf, i) === 1;
+                        if (found[i].rowRef && found[i].serverFound !== true) found[i].rowRef.money = 'no';
                         log('server ' + (found[i].serverFound ? 'CONFIRMED \u2713' : 'not confirmed') + ' ' + found[i].addr,
                             found[i].serverFound ? 'ok' : 'dim');
                     }
@@ -1455,8 +1552,13 @@ async function _doSpin(fixedWords, opts) {
                 if (confirmed.length > 0) {
                     await checkBalanceFilter(confirmed);
                     const balHits = confirmed.filter(function(f) { return f.balFound; }).length;
+                    for (let i = 0; i < confirmed.length; i++) if (confirmed[i].rowRef) confirmed[i].rowRef.money = confirmed[i].balFound === true ? 'yes' : 'no';
                     log('balance filter: ' + balHits + '/' + confirmed.length + ' have unspent BTC', balHits ? 'ok' : 'data');
-                    await saveHitToHistory(words, confirmed);
+                    const saved = await saveHitToHistory(words, confirmed);
+                    if (saved) {
+                        lastSpinHadFundedMatch = true;
+                        lastSpinFundedWords = words.join(' ');
+                    }
                 }
             }
         } else {
@@ -1500,9 +1602,10 @@ async function _doSpin(fixedWords, opts) {
 
     // 7. Show results
     const box = document.getElementById('resultsBox');
-    if (!isAuto) box.style.display = 'block';
+    if (DEBUG_MODE && !isAuto) box.style.display = 'block';
+    if (!DEBUG_MODE) box.style.display = 'none';
     const anyConfirmed = found.some(function(f) { return f.serverFound === true; });
-    box.className = found.length === 0 ? 'none' : anyConfirmed ? 'found-confirmed' : 'found-unconfirmed';
+    if (DEBUG_MODE) box.className = found.length === 0 ? 'none' : anyConfirmed ? 'found-confirmed' : 'found-unconfirmed';
 
     const localLabel = cf.sizeMB ? fmtFilterMB(cf.sizeMB) : '?';
     const serverConfirmedCount = found.filter(function(f) { return f.serverFound === true; }).length;
@@ -1559,15 +1662,17 @@ async function _doSpin(fixedWords, opts) {
         html += '</div>';
     }
 
-    box.innerHTML = html;
+    if (DEBUG_MODE) box.innerHTML = html;
 
     document.getElementById('statusLine').textContent =
         'Checked ' + checked + ' \xb7 Found: ' + found.length + (found.length ? ' \u2014 see results below' : '');
 
     if (!isAuto) document.getElementById('btnCopy').style.display = '';
+    if (!isAuto) renderSingleSpinResults(words, derivedRows);
     btn.disabled = false;
     registerSpinForCurrentState();
     totalAddresses += checked;
+    lastSpinExhaustiveDone = isCurrentStateExhausted();
     updateAutoStats();
     return anyConfirmed;
 } // end _doSpin
