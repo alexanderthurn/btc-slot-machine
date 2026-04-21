@@ -78,6 +78,14 @@
         .miss  .r-badge { color: #666; }
         .r-hash  { color: #555; flex: 1; min-width: 0; }
         .r-meta  { color: #888; white-space: nowrap; }
+        .res-kv { width: 100%; font-family: monospace; font-size: 12px; line-height: 1.5; }
+        .res-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+        .res-key { color: #666; min-width: 170px; }
+        .res-val { color: #111; }
+        .res-yes { color: #1a7a1a; font-weight: 700; }
+        .res-no { color: #999; font-weight: 700; }
+        .res-na { color: #888; font-weight: 700; }
+        .res-time { color: #777; font-size: 11px; }
 
         /* filter */
         .filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -291,7 +299,7 @@ async function fetchSqliteByKey(key32, limit = 20) {
     const t0 = performance.now();
     const resp = await fetch(`balance_lookup.php?key32=${encodeURIComponent(key32)}&limit=${limit}&_cb=${Date.now()}`);
     const d = await resp.json();
-    return { d, net_ms: (performance.now() - t0).toFixed(0) };
+    return { d, total_ms: (performance.now() - t0).toFixed(0) };
 }
 
 function renderSqliteResult(key32, data, err, timing = null) {
@@ -305,7 +313,7 @@ function renderSqliteResult(key32, data, err, timing = null) {
         return;
     }
     if (!data.count) {
-        const t = timing ? `\nphp ${timing.php_ms}ms · net ${timing.net_ms}ms` : '';
+        const t = timing ? `\nphp ${timing.php_ms}ms · total ${timing.total_ms}ms` : '';
         box.textContent =
             `key32=${key32}\n` +
             `rows=0\n` +
@@ -318,7 +326,7 @@ function renderSqliteResult(key32, data, err, timing = null) {
         `key32=${key32}\n` +
         `rows=${data.count} (limit ${data.limit})  distinct_txids=${txids}\n` +
         `total_sat=${data.total_sat} (${satToBTC(data.total_sat)} BTC)\n`;
-    if (timing) out += `php ${timing.php_ms}ms · net ${timing.net_ms}ms\n`;
+    if (timing) out += `php ${timing.php_ms}ms · total ${timing.total_ms}ms\n`;
     for (let i = 0; i < data.rows.length; i++) {
         const r = data.rows[i];
         out += `${i + 1}. ${r.txid_hex}:${r.vout}  ${r.value_sat} sat (${satToBTC(r.value_sat)} BTC)\n`;
@@ -326,7 +334,19 @@ function renderSqliteResult(key32, data, err, timing = null) {
     box.textContent = out.trim();
 }
 
-function logServerResults(results, totalMs, netMs, clientFound) {
+function boolBadge(v) {
+    if (v === true) return '<span class="res-yes">YES</span>';
+    if (v === false) return '<span class="res-no">NO</span>';
+    return '<span class="res-na">N/A</span>';
+}
+
+function fmtMs(v) {
+    if (v === null || v === undefined || v === '?') return '?ms';
+    const n = Number(v);
+    return Number.isFinite(n) ? `${n}ms` : `${v}ms`;
+}
+
+function logServerResults(results, totalMs, reqTotalMs, clientFound) {
     const addrResults = results.filter(r => !r.filter.includes('_bal'));
     const balResults  = results.filter(r =>  r.filter.includes('_bal'));
 
@@ -360,7 +380,7 @@ function logServerResults(results, totalMs, netMs, clientFound) {
         });
     }
 
-    log(`        ${''.padEnd(w, ' ')}  php ${totalMs}ms  net ${netMs}ms`, 'dim');
+    log(`        ${''.padEnd(w, ' ')}  php ${totalMs}ms  total ${reqTotalMs}ms`, 'dim');
 }
 
 // ── LOG ───────────────────────────────────────────────────────────────────────
@@ -661,48 +681,82 @@ async function verifyInput() {
         const serverT0 = performance.now();
         const serverPromise = fetch(`test.php?address_hex=${filterKey}&_cb=${Date.now()}`)
             .then(r => r.json())
-            .then(d => ({ d, net: (performance.now()-serverT0).toFixed(0) }))
+            .then(d => ({ d, total: (performance.now()-serverT0).toFixed(0) }))
             .catch(e => ({ err: e.message }));
         const sqlitePromise = fetchSqliteByKey(filterKey, 20)
-            .then(({ d, net_ms }) => ({ d, net_ms }))
+            .then(({ d, total_ms }) => ({ d, total_ms }))
             .catch(e => ({ err: e.message }));
 
         if (cr !== null) {
             // client result is instant — show immediately
             log(`${detectType}  ${raw}`, 'hi');
             log(`client · ${cf.sizeMB}mb · ${cr.ms}ms · ${cr.found?'HIT':'MISS'}`, cr.found?'ok':'data');
-            showResult(cr.found, filterKey, detectType, `${cf.sizeMB}mb`, cr.ms, null, null);
+            showResultSummary(raw, {
+                local: cr.found,
+                localMs: cr.ms,
+                server16: null,
+                server16bal: null,
+                serverPhpMs: null,
+                serverNetMs: null,
+                balanceSat: 0,
+                sqlitePhpMs: null,
+                sqliteNetMs: null,
+            });
             addHistory(raw, cr.found);
 
             // then append server result to log once it arrives
-            serverPromise.then(async ({ d, net, err }) => {
+            serverPromise.then(async ({ d, total, err }) => {
                 if (err) { log(`server · error: ${err}`, 'err'); return; }
                 if (d.error) { log(`server · error: ${d.error}`, 'err'); return; }
-                logServerResults(d.results, d.time_total_ms, net, cr.found);
-                showResult(cr.found, filterKey, detectType, `${cf.sizeMB}mb`, cr.ms, d.time_total_ms, net);
+                logServerResults(d.results, d.time_total_ms, total, cr.found);
                 const sq = await sqlitePromise;
                 const sqPhpMs = (sq.d && sq.d.time_total_ms !== undefined) ? sq.d.time_total_ms : '?';
                 if (!sq.err && sq.d && sq.d.ok) {
-                    log(`sqlite  · rows ${sq.d.count} · php ${sqPhpMs}ms · net ${sq.net_ms}ms`, sq.d.count ? 'ok' : 'dim');
+                    log(`sqlite  · rows ${sq.d.count} · php ${sqPhpMs}ms · total ${sq.total_ms}ms`, sq.d.count ? 'ok' : 'dim');
                 }
-                renderSqliteResult(filterKey, sq.d, sq.err, { php_ms: sqPhpMs, net_ms: sq.net_ms || '?' });
+                const s16 = parseServerHit(d.results || [], '16384mb.bin');
+                const s16bal = parseServerHit(d.results || [], '16384mb_bal.bin');
+                showResultSummary(raw, {
+                    local: cr.found,
+                    localMs: cr.ms,
+                    server16: s16,
+                    server16bal: s16bal,
+                    serverPhpMs: d.time_total_ms ?? null,
+                    serverTotalMs: total ?? null,
+                    balanceSat: (sq.d && sq.d.ok) ? (sq.d.total_sat || 0) : 0,
+                    sqlitePhpMs: sqPhpMs,
+                    sqliteTotalMs: sq.total_ms || '?',
+                });
+                renderSqliteResult(filterKey, sq.d, sq.err, { php_ms: sqPhpMs, total_ms: sq.total_ms || '?' });
             });
         } else {
             // no client filter — wait for server only
-            const { d, net, err } = await serverPromise;
+            const { d, total, err } = await serverPromise;
             if (err) throw new Error(err);
             if (d.error) throw new Error(d.error);
             log(`${detectType}  ${raw}`, 'hi');
-            logServerResults(d.results, d.time_total_ms, net, null);
+            logServerResults(d.results, d.time_total_ms, total, null);
             const best = d.results[0];
-            showResult(best.found, filterKey, detectType, best.filter, null, d.time_total_ms, net);
             addHistory(raw, best.found);
             const sq = await sqlitePromise;
             const sqPhpMs = (sq.d && sq.d.time_total_ms !== undefined) ? sq.d.time_total_ms : '?';
             if (!sq.err && sq.d && sq.d.ok) {
-                log(`sqlite  · rows ${sq.d.count} · php ${sqPhpMs}ms · net ${sq.net_ms}ms`, sq.d.count ? 'ok' : 'dim');
+                log(`sqlite  · rows ${sq.d.count} · php ${sqPhpMs}ms · total ${sq.total_ms}ms`, sq.d.count ? 'ok' : 'dim');
             }
-            renderSqliteResult(filterKey, sq.d, sq.err, { php_ms: sqPhpMs, net_ms: sq.net_ms || '?' });
+            const s16 = parseServerHit(d.results || [], '16384mb.bin');
+            const s16bal = parseServerHit(d.results || [], '16384mb_bal.bin');
+            showResultSummary(raw, {
+                local: null,
+                localMs: null,
+                server16: s16,
+                server16bal: s16bal,
+                serverPhpMs: d.time_total_ms ?? null,
+                serverTotalMs: total ?? null,
+                balanceSat: (sq.d && sq.d.ok) ? (sq.d.total_sat || 0) : 0,
+                sqlitePhpMs: sqPhpMs,
+                sqliteTotalMs: sq.total_ms || '?',
+            });
+            renderSqliteResult(filterKey, sq.d, sq.err, { php_ms: sqPhpMs, total_ms: sq.total_ms || '?' });
         }
     } catch (err) {
         setResult('err', err.message);
@@ -712,16 +766,22 @@ async function verifyInput() {
     btn.disabled = false; btn.textContent = 'Check';
 }
 
-function showResult(found, filterKey, detect, filterSrc, clientMs, phpMs, netMs) {
+function showResultSummary(inputAddr, summary) {
     const box = document.getElementById('resultBox');
-    box.className = found ? 'found' : 'miss';
-    const parts = [];
-    if (clientMs !== null) parts.push(`client ${clientMs}ms`);
-    if (phpMs   !== null) parts.push(`php ${phpMs}ms`);
-    if (netMs   !== null) parts.push(`net ${netMs}ms`);
-    box.innerHTML = `<span class="r-badge">${found ? '✓ FOUND' : '— NOT FOUND'}</span>`
-        + `<span class="r-hash">${filterKey.toUpperCase()}</span>`
-        + `<span class="r-meta">${esc(filterSrc)} · ${parts.join(' · ')}</span>`;
+    const hasAny = summary.server16 === true || summary.server16bal === true || summary.local === true;
+    box.className = hasAny ? 'found' : 'miss';
+    const balBtc = satToBTC(summary.balanceSat || 0);
+    const addrHtml = hasMempoolPage(inputAddr)
+        ? `<a href="https://mempool.space/address/${encodeURIComponent(inputAddr)}" target="_blank" rel="noopener">${esc(inputAddr)}</a>`
+        : esc(inputAddr);
+    box.innerHTML =
+        `<div class="res-kv">`
+      + `<div class="res-line"><span class="res-key">Address</span><span class="res-val">${addrHtml}</span></div>`
+      + `<div class="res-line"><span class="res-key">FOUND local (512M)</span><span class="res-val">${boolBadge(summary.local)}</span><span class="res-time">${summary.localMs !== null ? `(${fmtMs(summary.localMs)})` : ''}</span></div>`
+      + `<div class="res-line"><span class="res-key">FOUND server (16G)</span><span class="res-val">${boolBadge(summary.server16)}</span><span class="res-time">${summary.serverPhpMs !== null || summary.serverTotalMs !== null ? `(shared server request: fnv php ${fmtMs(summary.serverPhpMs)} · total ${fmtMs(summary.serverTotalMs)})` : ''}</span></div>`
+      + `<div class="res-line"><span class="res-key">FOUND server (16G bal)</span><span class="res-val">${boolBadge(summary.server16bal)}</span><span class="res-time"></span></div>`
+      + `<div class="res-line"><span class="res-key">Balance in BTC</span><span class="res-val">${balBtc} BTC</span><span class="res-time">${summary.sqlitePhpMs !== null || summary.sqliteTotalMs !== null ? `(sqlite php ${fmtMs(summary.sqlitePhpMs)} · total ${fmtMs(summary.sqliteTotalMs)})` : ''}</span></div>`
+      + `</div>`;
 }
 
 function setResult(cls, msg) {

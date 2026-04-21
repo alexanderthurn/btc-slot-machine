@@ -224,7 +224,7 @@
 </div>
 <div id="autoStatsRow"><span id="autoStats"></span></div>
 
-<div id="noFilterBanner">No filter loaded. Spinning will auto-download the 512M filter (~512 MB). Load the 16G filter below for best accuracy.</div>
+<div id="noFilterBanner">No filter loaded. Spinning will auto-download the 512M filter (~512 MB). Server confirmations always use 16G.</div>
 <div id="resultsBox" style="display:none"></div>
 
 <hr>
@@ -232,7 +232,6 @@
 <div class="filter-row">
     <span class="filter-lbl">Local Filter:</span>
     <button class="cf-btn" data-mb="512"   data-bits="32" onclick="filterClick(512,32)">512M</button>
-    <button class="cf-btn" data-mb="16384" data-bits="37" onclick="filterClick(16384,37)">16G</button>
 </div>
 
 <div class="idb-row" id="idbRow" style="display:none">
@@ -323,13 +322,28 @@ function balPos(key) {
     return [Number(trunc >> 6n), Number(trunc & 63n)];
 }
 
+function isValidFilterKey(key) {
+    return typeof key === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(key.toLowerCase());
+}
+
 // Check balance filter for items that passed server filter (sets item.balFound).
 async function checkBalanceFilter(items) {
     if (!items.length) return;
+    const validItems = [];
+    for (let i = 0; i < items.length; i++) {
+        const fk = String(items[i].filterKey || '').trim().toLowerCase();
+        if (isValidFilterKey(fk)) {
+            items[i].filterKey = fk;
+            validItems.push(items[i]);
+        } else {
+            items[i].balFound = null;
+        }
+    }
+    if (!validItems.length) return;
     try {
-        const resp = await fetch('index_bal.php', { method: 'POST', body: packLookups(items.map(function(f) { return balPos(f.filterKey); })) });
+        const resp = await fetch('index_bal.php', { method: 'POST', body: packLookups(validItems.map(function(f) { return balPos(f.filterKey); })) });
         const buf  = new Uint32Array(await resp.arrayBuffer());
-        for (let i = 0; i < items.length; i++) items[i].balFound = readBit(buf, i) === 1;
+        for (let i = 0; i < validItems.length; i++) validItems[i].balFound = readBit(buf, i) === 1;
     } catch(e) { log('balance filter error: ' + e.message, 'err'); }
 }
 
@@ -402,7 +416,7 @@ async function refreshIDBState() {
     if (!keys.length) { delRow.style.display = 'none'; return; }
     delRow.style.display = '';
     delList.innerHTML = '';
-    const labels = { 512:'512M', 16384:'16G' };
+    const labels = { 512:'512M' };
     keys.sort(function(a,b){return a-b;}).forEach(function(mb) {
         const btn = document.createElement('button');
         btn.className = 'del-btn';
@@ -463,6 +477,7 @@ function deactivateFilter() {
 }
 
 async function filterClick(sizeMB, bitsExp) {
+    if (sizeMB !== 512) return;
     if (cf.sizeMB === sizeMB) { deactivateFilter(); return; }
     if (cf.abort) { cf.abort.abort(); cf.abort = null; showProgress(false); }
     const cached = await idbLoad(sizeMB);
@@ -709,7 +724,7 @@ function saveHitToHistory(words, found) {
     hist.unshift({
         ts: Date.now(),
         words: words,
-        found: found.map(function(f) { return { type: f.type, addr: f.addr, serverFound: f.serverFound, balFound: f.balFound }; })
+        found: found.map(function(f) { return { type: f.type, addr: f.addr, filterKey: f.filterKey, serverFound: f.serverFound, balFound: f.balFound }; })
     });
     if (hist.length > MAX_HITS) hist.splice(MAX_HITS);
     localStorage.setItem(HITS_KEY, JSON.stringify(hist));
@@ -747,7 +762,8 @@ function renderHitsHistory() {
             const bal = f.serverFound === true
                       ? (f.balFound === true ? ' <span style="color:#1a7a1a">\u2713btc</span>'
                       : f.balFound === false  ? ' <span style="color:#888">nobal</span>' : '') : '';
-            addrHtml += '<div class="hits-entry-addr" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">'
+            const key32 = normalizeKey32Hex(f.filterKey || '');
+            addrHtml += '<div class="hits-entry-addr" data-key32="' + esc(key32) + '" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">'
                 + '<span>' + esc(f.type) + ' ' + esc(f.addr) + srv + bal + '</span>'
                 + '<span class="res-bal" style="font-size:11px;font-family:monospace;white-space:nowrap;flex:1;color:#888"></span>'
                 + '<a href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank" onclick="event.stopPropagation()" class="res-link">mempool&#8599;</a>'
@@ -833,7 +849,7 @@ async function flushPendingHits() {
             if (keyResult[item.filterKey] === true) {
                 const key = item.words.join(' ');
                 if (!byMnemonic[key]) byMnemonic[key] = { words: item.words, found: [] };
-                byMnemonic[key].found.push({ type: item.type, addr: item.addr, serverFound: true });
+                byMnemonic[key].found.push({ type: item.type, addr: item.addr, filterKey: item.filterKey, serverFound: true });
             }
         }
 
@@ -860,6 +876,14 @@ async function flushPendingHits() {
     }
 }
 
+function normalizeKey32Hex(filterKey) {
+    const hex = String(filterKey || '').trim().toLowerCase();
+    if (!/^[0-9a-f]+$/.test(hex)) return '';
+    if (hex.length === 64) return hex;
+    if (hex.length === 40) return hex + '000000000000000000000000';
+    return '';
+}
+
 async function checkBalancesIn(btn, container) {
     btn.disabled = true;
     btn.textContent = '\u2026';
@@ -874,17 +898,24 @@ async function checkBalancesIn(btn, container) {
             ? addrEl.textContent.trim()
             : addrEl.textContent.trim().split(/\s+/)[1];
         if (!addrText) continue;
+        const key32 = normalizeKey32Hex(rows[i].dataset.key32 || '');
         balEl.textContent = '\u2026';
         try {
-            const resp = await fetch('https://mempool.space/api/address/' + encodeURIComponent(addrText));
+            if (!key32) {
+                balEl.style.color = '#888';
+                balEl.textContent = 'no key32 (old entry)';
+                continue;
+            }
+            const resp = await fetch('balance_lookup.php?key32=' + key32 + '&limit=1&_cb=' + Date.now());
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            const data    = await resp.json();
-            const funded  = data.chain_stats.funded_txo_sum;
-            const balance = funded - data.chain_stats.spent_txo_sum;
-            balEl.style.color = funded > 0 ? (balance > 0 ? '#1a7a1a' : '#888') : '#bbb';
-            balEl.textContent  = funded > 0
-                ? 'bal\xa0' + btc(balance) + '\xa0·\xa0rcv\xa0' + btc(funded)
-                : 'no history';
+            const data = await resp.json();
+            if (!data || data.ok !== true) throw new Error((data && data.error) ? data.error : 'lookup failed');
+            const totalSat = Number(data.total_sat || 0);
+            const rowsCount = Number(data.count || 0);
+            balEl.style.color = rowsCount > 0 ? '#1a7a1a' : '#888';
+            balEl.textContent = rowsCount > 0
+                ? ('utxo\xa0' + rowsCount + '\xa0·\xa0bal\xa0' + btc(totalSat))
+                : 'no utxo';
         } catch(e) {
             balEl.style.color   = '#c00';
             balEl.textContent   = e.message;
@@ -1133,8 +1164,8 @@ async function _doSpin(fixedWords, opts) {
 
         if (!isAuto) log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 found ' + found.length, found.length ? 'ok' : 'data');
     } else {
-        document.getElementById('statusLine').textContent = 'Downloading 32M filter\u2026';
-        if (!isAuto) log('no filter loaded \u2014 auto-downloading 32M filter\u2026', 'dim');
+        document.getElementById('statusLine').textContent = 'Downloading 512M filter\u2026';
+        if (!isAuto) log('no filter loaded \u2014 auto-downloading 512M filter\u2026', 'dim');
         await filterClick(512, 32);
         if (cf.view) {
             if (!isAuto) log('filter ready \u2014 re-checking\u2026', 'dim');
@@ -1178,7 +1209,7 @@ async function _doSpin(fixedWords, opts) {
                 ? '<span class="res-server unconfirmed">no balance</span>'
                 : '')
             : '';
-        return '<div class="res-item">'
+        return '<div class="res-item" data-key32="' + esc(normalizeKey32Hex(f.filterKey || '')) + '">'
             + '<span class="res-type">' + esc(f.type) + '</span>'
             + '<span class="res-addr">' + esc(f.addr) + '</span>'
             + srvHtml
@@ -1228,7 +1259,7 @@ window.addEventListener('DOMContentLoaded', async function() {
     renderHitsHistory();
 
     const lastMB = parseInt(localStorage.getItem('btc_active_filter') || '0');
-    if (lastMB) {
+    if (lastMB === 512) {
         const cached = await idbLoad(lastMB);
         if (cached) {
             activateFilter(cached.sizeMB, cached.bitsExp, cached.buffer);
@@ -1237,6 +1268,7 @@ window.addEventListener('DOMContentLoaded', async function() {
             log('ready \u2014 no filter loaded', 'dim');
         }
     } else {
+        if (lastMB && lastMB !== 512) localStorage.removeItem('btc_active_filter');
         log('ready \u2014 no filter loaded', 'dim');
     }
 
