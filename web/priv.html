@@ -26,6 +26,7 @@
             flex-wrap: wrap;
         }
         .hdr-left { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+        .hdr-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
         .hdr h1 { font-size: 16px; font-weight: 700; }
         .hdr a { font-size: 12px; color: #666; text-decoration: none; }
         .hdr a:hover { text-decoration: underline; }
@@ -49,6 +50,43 @@
             margin-bottom: 10px;
             border-radius: 4px;
             line-height: 1.45;
+        }
+        #privHitBanner.hit-banner {
+            display: none;
+            font-size: 12px;
+            border: 1px solid #2a7a3a;
+            background: #f0fff4;
+            color: #1a4a22;
+            padding: 8px 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            line-height: 1.5;
+        }
+        #privHitBanner.hit-banner a { color: #0d5f2a; word-break: break-all; }
+        .priv-key-formats {
+            margin-top: 10px;
+            font-size: 11px;
+            color: #333;
+        }
+        .priv-key-formats dt {
+            font-weight: 600;
+            color: #555;
+            margin-top: 6px;
+            clear: left;
+        }
+        .priv-key-formats dd {
+            margin: 2px 0 0 0;
+            padding-left: 0;
+        }
+        .priv-key-formats code {
+            display: block;
+            word-break: break-all;
+            font-size: 10px;
+            background: #fff;
+            border: 1px solid #d8eedc;
+            padding: 4px 6px;
+            border-radius: 3px;
+            margin-top: 2px;
         }
 
         .filter-status-top {
@@ -133,7 +171,35 @@
         .scan-space-box .sse-line { margin: 0 0 6px 0; color: #333; }
         .scan-space-box .sse-num { font-family: monospace; font-size: 11px; word-break: break-all; color: #111; }
         .scan-space-box .sse-sub { font-size: 11px; color: #555; margin: 0 0 4px 0; }
+        .scan-space-box .sse-analogy { font-size: 11px; color: #555; margin: 0 0 5px 0; padding-left: 0; }
+        .scan-space-box .sse-section-title { font-weight: 600; font-size: 11px; color: #444; margin: 10px 0 6px 0; }
         .scan-space-box .sse-rate { font-size: 11px; color: #444; margin: 0 0 4px 0; font-family: monospace; }
+
+        #singleSpinBox {
+            font-size: 12px;
+            border: 1px solid #ddd;
+            padding: 8px 10px;
+            margin-bottom: 10px;
+            background: #fafafa;
+            display: none;
+        }
+        .priv-spin-section { margin-top: 10px; }
+        .priv-spin-section:first-child { margin-top: 0; }
+        .priv-spin-h { font-weight: 600; font-size: 11px; color: #444; margin-bottom: 4px; }
+        .ss-summary { font-family: monospace; font-size: 11px; color: #555; margin-bottom: 6px; line-height: 1.45; }
+        .ss-head { font-family: monospace; color: #555; margin-bottom: 6px; }
+        .ss-row { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid #f0f0f0; padding: 2px 0; }
+        .ss-row:last-child { border-bottom: none; }
+        .ss-tag { font-family: monospace; font-size: 10px; color: #888; min-width: 92px; }
+        .ss-addr { font-family: monospace; font-size: 11px; flex: 1; min-width: 0; word-break: break-all; color: #111; text-decoration: none; }
+        .ss-addr:hover { text-decoration: underline; color: #333; }
+        .ss-mp { font-size: 10px; color: #888; text-decoration: none; white-space: nowrap; }
+        .ss-mp:hover { color: #333; text-decoration: underline; }
+        .auto-label { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #444; cursor: pointer; white-space: nowrap; user-select: none; }
+        .auto-label input { cursor: pointer; }
+        #eduStatsAuto .stat-sep { color: #ccc; margin: 0 4px; }
+        .range-foot { font-size: 11px; color: #666; margin-top: 6px; }
+        .range-foot button.link { background: none; border: none; padding: 0; color: #0645ad; cursor: pointer; text-decoration: underline; font-size: inherit; }
 
         #eduStatsBox {
             border: 1px solid #ddd;
@@ -185,13 +251,17 @@
         <h1>Private key search</h1>
         <a href="index.html">Mnemonic slot machine &#8599;</a>
     </div>
-    <button type="button" class="hdr-btn" id="btnDebugToggle" title="Log &amp; filter tools" aria-pressed="false">debug</button>
+    <div class="hdr-right">
+        <button type="button" class="hdr-btn" id="btnDebugToggle" title="Log &amp; filter tools" aria-pressed="false">debug</button>
+    </div>
 </div>
 
 <p class="warn-box">
     <strong>Educational only.</strong> Do not paste real funded keys. This page scans a <em>numeric range</em> of private scalars and tests derived addresses against the local bloom filter.
     Sequential keys use fast <code>pub + G</code> point steps after the first full multiply.
 </p>
+
+<div id="privHitBanner" class="hit-banner" role="alert" style="display:none"></div>
 
 <div id="filterStatusTop" class="filter-status-top" style="display:none" role="status" aria-live="polite">
     <span id="filterStatusMsg" class="filter-status-msg"></span>
@@ -210,19 +280,16 @@
 <div class="range-block">
     <div class="range-row">
         <div>
-            <label for="privStartHex">Start private key (hex, 1\u201364 hex digits)</label>
+            <label for="privStartHex">Range start (hex, 1\u201364 hex digits)</label>
             <input type="text" id="privStartHex" value="1" placeholder="e.g. 1 or full 32-byte hex" autocomplete="off" spellcheck="false" oninput="onPrivInputsChanged()">
         </div>
         <div>
-            <label for="privCount">How many keys to try (sequential)</label>
+            <label for="privCount">Range width (keys)</label>
             <input type="number" id="privCount" min="1" max="100000000" step="1" value="10000" oninput="onPrivInputsChanged()">
         </div>
     </div>
-    <div class="spin-row">
-        <button type="button" id="btnScan" onclick="toggleScan()">Start scan</button>
-        <button type="button" id="btnCheckpoint" onclick="clearCheckpoint()">Clear saved position</button>
-    </div>
-    <p style="font-size:11px;color:#666;margin-top:6px">Max keys per run: 100,000,000. Progress is saved every <span id="checkpointSpan">5000</span> keys (browser storage).</p>
+    <p class="range-foot">SPIN picks a <strong>uniform random</strong> key in <code>[start, start+width\u22121]</code> (clamped below curve order). Max width 100,000,000. Auto mode steps sequentially and saves progress every <span id="checkpointSpan">5000</span> keys.
+        <button type="button" class="link" id="btnClearCheckpoint">Clear saved position</button></p>
 </div>
 
 <div class="scan-row">
@@ -235,10 +302,17 @@
     </div>
 </div>
 
+<div class="spin-row">
+    <button type="button" id="btnSpin" onclick="doPrivSpin()">SPIN</button>
+    <label class="auto-label"><input type="checkbox" id="chkAuto" onchange="onPrivAutoChange()"> auto</label>
+</div>
+
+<div id="singleSpinBox"></div>
+
 <div id="privExplainer" class="scan-space-box" aria-live="polite"></div>
 
 <div id="eduStatsBox">
-    <div id="eduStatsAuto">Idle.</div>
+    <div id="eduStatsAuto">Waiting for first key…</div>
     <div id="eduProgressWrap">
         <div id="eduProgressBar"><div id="eduProgressFill"></div></div>
         <div id="eduProgressText">Range progress: 0%</div>
@@ -280,6 +354,310 @@ const PRIV_FLUSH_INTERVAL_MS = 1200;
 const PRIV_FLUSH_MAX_QUEUE = 2000;
 let pendingPrivHits = [];
 let lastPrivFlushTime = Date.now();
+
+let spinBusy = false;
+/** Total private keys tried (random SPIN + sequential auto) for rates / explainer. */
+let privKeysTriedTotal = 0;
+let privRandomSpinCount = 0;
+let pageStartTimePriv = Date.now();
+
+function setSpinBtnAfterPriv() {
+    const btn = document.getElementById('btnSpin');
+    if (!btn) return;
+    btn.disabled = !!spinBusy || scanRunning;
+}
+
+function powBigInt(base, exp) {
+    let r = 1n;
+    const b = BigInt(base);
+    for (let i = 0; i < exp; i++) r *= b;
+    return r;
+}
+
+const AGE_UNIVERSE_YEARS = 13.8e9;
+
+function log10BigInt(n) {
+    if (n <= 0n) return -Infinity;
+    const s = n.toString();
+    const d = s.length;
+    if (d <= 15) return Math.log10(Number(n));
+    const head = s.slice(0, 15);
+    return Math.log10(parseInt(head, 10)) + (d - 15);
+}
+
+function approxSecondsForBigIntSpace(space, triesPerSec) {
+    if (triesPerSec <= 0 || !isFinite(triesPerSec)) return Infinity;
+    return Math.pow(10, log10BigInt(space) - Math.log10(triesPerSec));
+}
+
+function formatDuration(sec) {
+    if (!isFinite(sec) || sec < 0) return 'n/a';
+    if (sec < 1) return '<1s';
+    if (sec < 60) return Math.round(sec) + 's';
+    if (sec < 3600) return Math.round(sec / 60) + 'm';
+    if (sec < 86400) return Math.round(sec / 3600) + 'h';
+    if (sec < 31536000) return Math.round(sec / 86400) + 'd';
+    return Math.round(sec / 31536000) + 'y';
+}
+
+function formatSearchDurationApproxSec(sec) {
+    if (!isFinite(sec) || sec < 0) return 'n/a';
+    if (sec < 0.5) return 'under a second';
+    if (sec < 31536000) return formatDuration(sec) + ' (approx.)';
+    const years = sec / 31536000;
+    if (years < AGE_UNIVERSE_YEARS) return years.toPrecision(4) + ' yr (approx.)';
+    const mult = years / AGE_UNIVERSE_YEARS;
+    if (mult < 1e9) return '\u2248 ' + mult.toPrecision(4) + ' \u00d7 age of the universe (\u224813.8 billion yr)';
+    return '\u2248 10^' + Math.log10(mult).toFixed(1) + ' \u00d7 age of the universe';
+}
+
+function buildMnemonicAnalogyLines(logN) {
+    const out = [];
+    if (logN >= 78)
+        out.push('Roughly comparable in order of magnitude to common estimates for atoms in the observable universe (\u224810\u2078\u2070).');
+    else if (logN >= 50)
+        out.push('Vastly larger than rough estimates for atoms in Earth (\u224810\u2075\u2070).');
+    if (logN >= 24) {
+        const diff = logN - 24;
+        out.push('About 10^' + diff.toFixed(1) + ' times more combinations than stars in the observable universe (often quoted around 10\u00b2\u2074).');
+    } else if (logN >= 18) {
+        out.push('Larger than rough estimates for grains of sand on Earth (\u224810\u00b9\u2078\u201310\u00b9\u2079).');
+    } else if (logN >= 10) {
+        out.push('Larger than the number of people on Earth (\u224810\u2079).');
+    }
+    return out.slice(0, 3);
+}
+
+function getRangeSpanBig(startK, countNum) {
+    const cnt = BigInt(countNum);
+    if (cnt < 1n || startK < 1n || startK >= N_ORDER) return 0n;
+    const lastWanted = startK + cnt - 1n;
+    if (lastWanted < N_ORDER) return cnt;
+    return N_ORDER - startK;
+}
+
+function randomOffsetBelow(span) {
+    if (span <= 0n) return 0n;
+    if (span === 1n) return 0n;
+    const buf = new Uint8Array(32);
+    crypto.getRandomValues(buf);
+    let v = 0n;
+    for (let i = 0; i < 32; i++) v = (v << 8n) | BigInt(buf[i]);
+    return v % span;
+}
+
+function pickRandomKeyInRange(startK, countNum) {
+    const span = getRangeSpanBig(startK, countNum);
+    if (span <= 0n) return null;
+    return startK + randomOffsetBelow(span);
+}
+
+function getPublicKeyFormats(pub33) {
+    const kp = EC.keyFromPublic(pub33);
+    const pub = kp.getPublic();
+    const compressedHex = pub.encode('hex', true);
+    const uncompressedHex = pub.encode('hex', false);
+    const xOnlyFromComp = compressedHex.length >= 66 ? compressedHex.slice(2) : '';
+    return {
+        compressedHex: compressedHex,
+        uncompressedHex: uncompressedHex,
+        xOnlyHex: xOnlyFromComp
+    };
+}
+
+function renderPrivSpinBox(kBig, pub33, rows, summaryLine) {
+    const box = document.getElementById('singleSpinBox');
+    if (!box) return;
+    const keyHex = bytesToHex(bigIntToPriv32(kBig));
+    const fmts = formatPrivateKeyAllFormats(keyHex);
+    const pubFmt = getPublicKeyFormats(pub33);
+    let html = '';
+    if (summaryLine) html += '<div class="ss-summary">' + esc(summaryLine) + '</div>';
+
+    html += '<div class="priv-spin-section"><div class="priv-spin-h">Private key</div>';
+    if (fmts) {
+        html += '<dl class="priv-key-formats">';
+        html += '<dt>Hex</dt><dd><code>' + esc(fmts.hex) + '</code></dd>';
+        html += '<dt>Hex (0x)</dt><dd><code>' + esc(fmts.hex0x) + '</code></dd>';
+        html += '<dt>Decimal</dt><dd><code>' + esc(fmts.decimalGrouped) + '</code></dd>';
+        html += '<dt>WIF mainnet compressed</dt><dd><code>' + esc(fmts.wifMainCompressed) + '</code></dd>';
+        html += '<dt>WIF mainnet uncompressed</dt><dd><code>' + esc(fmts.wifMainUncompressed) + '</code></dd>';
+        html += '<dt>WIF testnet compressed</dt><dd><code>' + esc(fmts.wifTestCompressed) + '</code></dd>';
+        html += '<dt>WIF testnet uncompressed</dt><dd><code>' + esc(fmts.wifTestUncompressed) + '</code></dd>';
+        html += '<dt>Base64 (32 bytes)</dt><dd><code>' + esc(fmts.base64) + '</code></dd>';
+        html += '</dl>';
+    } else {
+        html += '<code>' + esc(keyHex) + '</code>';
+    }
+    html += '</div>';
+
+    html += '<div class="priv-spin-section"><div class="priv-spin-h">Public key</div><dl class="priv-key-formats">';
+    html += '<dt>Compressed (33 bytes hex)</dt><dd><code>' + esc(pubFmt.compressedHex) + '</code></dd>';
+    html += '<dt>Uncompressed (65 bytes hex)</dt><dd><code>' + esc(pubFmt.uncompressedHex) + '</code></dd>';
+    html += '<dt>x-only (32 bytes, for Taproot tweak)</dt><dd><code>' + esc(pubFmt.xOnlyHex) + '</code></dd>';
+    html += '<dt>Base64 compressed (33 bytes)</dt><dd><code>' + esc(bytesToBase64Raw(pub33)) + '</code></dd>';
+    html += '</dl></div>';
+
+    html += '<div class="priv-spin-section"><div class="priv-spin-h">Derived addresses</div>';
+    if (!rows || !rows.length) {
+        html += '<p style="font-size:11px;color:#888">No address types selected.</p>';
+    } else {
+        html += '<div class="ss-head">' + rows.length + ' address type(s)</div>';
+        for (let i = 0; i < rows.length; i++) {
+            const r = rows[i];
+            const bloom = r.localBloom ? ('bloom ' + (r.localBloom === 'hit' ? 'maybe' : 'no')) : '';
+            const sql = typeof r.sqliteHasUtxo === 'boolean'
+                ? (' · sqlite ' + (r.sqliteHasUtxo ? formatSqliteBalanceLine(r) : '0 BTC'))
+                : '';
+            html += '<div class="ss-row">'
+                + '<span class="ss-tag">' + esc(r.type) + '</span>'
+                + '<a class="ss-addr" href="test.html?address=' + encodeURIComponent(r.addr) + '">' + esc(r.addr) + '</a>'
+                + '<span style="font-size:10px;color:#888">' + esc(bloom) + esc(sql) + '</span>'
+                + '<a class="ss-mp" href="https://mempool.space/address/' + encodeURIComponent(r.addr) + '" target="_blank" rel="noopener">mempool&#8599;</a>'
+                + '</div>';
+        }
+    }
+    html += '</div>';
+
+    box.innerHTML = html;
+    box.style.display = 'block';
+}
+
+async function doPrivSpin() {
+    if (spinBusy || scanRunning) return;
+    const st = parseStartHex();
+    if (!st.ok) { alert(st.err); return; }
+    const cnt = parseCount();
+    if (!cnt.ok) { alert(cnt.err); return; }
+    const defs = getScanAddrDefs();
+    if (!defs.length) {
+        alert('Select at least one address type.');
+        return;
+    }
+    spinBusy = true;
+    setSpinBtnAfterPriv();
+    hidePrivHitBanner();
+
+    if (!cf.view) {
+        await filterClick(512, 32);
+        if (!cf.view) {
+            spinBusy = false;
+            setSpinBtnAfterPriv();
+            return;
+        }
+    }
+
+    try {
+        const k = pickRandomKeyInRange(st.k, cnt.n);
+        if (k === null || k < 1n || k >= N_ORDER) {
+            alert('Could not pick a key in range (check start and width).');
+            return;
+        }
+        const priv32 = bigIntToPriv32(k);
+        if (!priv32) {
+            alert('Invalid private key scalar.');
+            return;
+        }
+        const pubPoint = EC.keyFromPrivate(priv32).getPublic();
+        const pub33 = pubPointToCompressed(pubPoint);
+
+        const rows = [];
+        for (let di = 0; di < defs.length; di++) {
+            const d = defs[di];
+            const row = d.fn(pub33);
+            const res = clientLookup(row.filterKey);
+            rows.push({
+                type: d.type,
+                addr: row.addr,
+                h160: row.h160,
+                filterKey: row.filterKey,
+                localBloom: res && res.found ? 'hit' : 'miss'
+            });
+        }
+
+        let summary = 'Random key in range · filter ' + (cf.sizeMB || '?') + 'MB';
+        const locals = rows.filter(function(r) { return r.localBloom === 'hit'; });
+        if (locals.length) {
+            try {
+                const resp = await fetch('index.php', { method: 'POST', body: packLookups(locals.map(function(f) { return serverPos(f.filterKey); })) });
+                const buf = new Uint32Array(await resp.arrayBuffer());
+                for (let i = 0; i < locals.length; i++) {
+                    const srv = readBit(buf, i) === 1;
+                    locals[i].serverOk = srv;
+                    const idx = rows.findIndex(function(x) { return x.addr === locals[i].addr && x.type === locals[i].type; });
+                    if (idx >= 0) rows[idx].serverOk = srv;
+                }
+                const ok = rows.filter(function(r) { return r.serverOk === true; });
+                if (ok.length) {
+                    const balRes = await checkBalanceFilter(ok);
+                    for (let i = 0; i < ok.length; i++) {
+                        const idx = rows.findIndex(function(x) { return x.addr === ok[i].addr && x.type === ok[i].type; });
+                        if (idx >= 0) rows[idx].balFound = ok[i].balFound;
+                    }
+                    const bloomPos = ok.filter(function(r) { return r.balFound === true; });
+                    if (balRes.ok && bloomPos.length) {
+                        clearSqliteKeyCache();
+                        await enrichHistoryCandidatesWithSqlite(bloomPos);
+                        for (let i = 0; i < ok.length; i++) {
+                            const idx = rows.findIndex(function(x) { return x.addr === ok[i].addr && x.type === ok[i].type; });
+                            if (idx >= 0) {
+                                rows[idx].sqliteCount = ok[i].sqliteCount;
+                                rows[idx].sqliteTotalSat = ok[i].sqliteTotalSat;
+                                rows[idx].sqliteHasUtxo = ok[i].sqliteHasUtxo;
+                            }
+                        }
+                    }
+                }
+                const srvN = ok.filter(function(r) { return r.serverOk; }).length;
+                const sqliteFunded = rows.filter(function(r) { return r.sqliteHasUtxo === true; }).length;
+                summary += ' · local ' + locals.length + ' bloom maybe · server ' + srvN + ' · SQLite funded ' + sqliteFunded;
+            } catch (e) {
+                summary += ' · server check failed';
+            }
+        } else {
+            summary += ' · no local bloom hits';
+        }
+
+        renderPrivSpinBox(k, pub33, rows, summary);
+        privRandomSpinCount++;
+        privKeysTriedTotal++;
+        updatePrivExplainer();
+        updatePrivIdleStats();
+    } finally {
+        spinBusy = false;
+        setSpinBtnAfterPriv();
+    }
+}
+
+function updatePrivIdleStats() {
+    if (scanRunning) return;
+    const elapsed = (Date.now() - pageStartTimePriv) / 1000;
+    const kps = elapsed > 0 && privKeysTriedTotal > 0 ? (privKeysTriedTotal / elapsed).toFixed(2) : '0.00';
+    const defs = getScanAddrDefs().length;
+    const addrPerKey = Math.max(1, defs);
+    const aps = elapsed > 0 && privKeysTriedTotal > 0
+        ? ((privKeysTriedTotal * addrPerKey) / elapsed).toFixed(1)
+        : '0.0';
+    let html = privKeysTriedTotal.toLocaleString() + ' keys tried'
+        + '<span class="stat-sep">·</span>' + kps + ' keys/s (all activity)'
+        + '<span class="stat-sep">·</span>' + privRandomSpinCount + ' SPIN'
+        + '<span class="stat-sep">·</span>addr/s \u2248 ' + aps;
+    document.getElementById('eduStatsAuto').innerHTML = html;
+}
+
+async function onPrivAutoChange() {
+    const chk = document.getElementById('chkAuto');
+    if (!chk || !chk.checked) {
+        scanAbort = true;
+        return;
+    }
+    if (!cf.view) {
+        alert('Load the 512M local filter first.');
+        chk.checked = false;
+        return;
+    }
+    await runSequentialScan();
+}
 
 function syncDebugToggleUi() {
     const btn = document.getElementById('btnDebugToggle');
@@ -347,8 +725,9 @@ function isValidFilterKey(key) {
     return typeof key === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(key.toLowerCase());
 }
 
+/** Sets item.balFound; returns whether the HTTP request completed and bits were applied. */
 async function checkBalanceFilter(items) {
-    if (!items.length) return;
+    if (!items.length) return { ok: true };
     const validItems = [];
     for (let i = 0; i < items.length; i++) {
         const fk = String(items[i].filterKey || '').trim().toLowerCase();
@@ -359,12 +738,87 @@ async function checkBalanceFilter(items) {
             items[i].balFound = null;
         }
     }
-    if (!validItems.length) return;
+    if (!validItems.length) return { ok: true };
     try {
         const resp = await fetch('index_bal.php', { method: 'POST', body: packLookups(validItems.map(function(f) { return balPos(f.filterKey); })) });
         const buf  = new Uint32Array(await resp.arrayBuffer());
         for (let i = 0; i < validItems.length; i++) validItems[i].balFound = readBit(buf, i) === 1;
-    } catch(e) { log('balance filter error: ' + e.message, 'err'); }
+        return { ok: true };
+    } catch(e) { log('balance filter error: ' + e.message, 'err'); return { ok: false }; }
+}
+
+function normalizeKey32Hex(filterKey) {
+    const hex = String(filterKey || '').trim().toLowerCase();
+    if (!/^[0-9a-f]+$/.test(hex)) return '';
+    if (hex.length === 64) return hex;
+    if (hex.length === 40) return hex + '000000000000000000000000';
+    return '';
+}
+
+function fmtBtcHuman(sat) {
+    const n = Number(sat) || 0;
+    if (n <= 0) return '0 BTC';
+    const btc = n / 1e8;
+    if (btc >= 100) return btc.toFixed(2) + ' BTC';
+    if (btc >= 1) return btc.toFixed(2) + ' BTC';
+    if (btc >= 0.01) return btc.toFixed(4) + ' BTC';
+    return btc.toFixed(8) + ' BTC';
+}
+
+function formatSqliteBalanceLine(r) {
+    if (typeof r.sqliteHasUtxo !== 'boolean') return '';
+    if (r.sqliteHasUtxo === true) {
+        const c = Number(r.sqliteCount || 0);
+        const sat = Number(r.sqliteTotalSat || 0);
+        let s = fmtBtcHuman(sat);
+        if (c > 1) s += ' · ' + c + ' outs';
+        return s;
+    }
+    return '0 BTC';
+}
+
+let sqliteKeyCache = {};
+function clearSqliteKeyCache() { sqliteKeyCache = {}; }
+
+async function enrichHistoryCandidatesWithSqlite(items) {
+    if (!items || !items.length) return items || [];
+    const uniqueKeys = [];
+    const seen = {};
+    for (let i = 0; i < items.length; i++) {
+        const k = normalizeKey32Hex(items[i].filterKey || '');
+        if (!k || seen[k]) continue;
+        seen[k] = true;
+        if (sqliteKeyCache[k] === undefined) uniqueKeys.push(k);
+    }
+    await Promise.all(uniqueKeys.map(function(k, idx) {
+        return fetch('balance_lookup.php?key32=' + encodeURIComponent(k) + '&limit=200&_cb=' + Date.now() + '_' + idx)
+            .then(function(resp) { return resp.ok ? resp.json() : null; })
+            .then(function(data) {
+                if (!data || data.ok !== true) {
+                    sqliteKeyCache[k] = { sqliteCount: 0, sqliteTotalSat: 0, sqliteHasUtxo: false };
+                    return;
+                }
+                const c = Number(data.count || 0);
+                const sat = Number(data.total_sat || 0);
+                sqliteKeyCache[k] = { sqliteCount: c, sqliteTotalSat: sat, sqliteHasUtxo: c > 0 };
+            })
+            .catch(function() {
+                sqliteKeyCache[k] = { sqliteCount: 0, sqliteTotalSat: 0, sqliteHasUtxo: false };
+            });
+    }));
+    for (let i = 0; i < items.length; i++) {
+        const k = normalizeKey32Hex(items[i].filterKey || '');
+        items[i].sqliteCount = 0;
+        items[i].sqliteTotalSat = 0;
+        items[i].sqliteHasUtxo = false;
+        if (k && sqliteKeyCache[k]) {
+            const s = sqliteKeyCache[k];
+            items[i].sqliteCount = s.sqliteCount;
+            items[i].sqliteTotalSat = s.sqliteTotalSat;
+            items[i].sqliteHasUtxo = s.sqliteHasUtxo;
+        }
+    }
+    return items;
 }
 
 function packLookups(positions) {
@@ -678,6 +1132,49 @@ function base58Check(payload) {
     return base58Encode(new Uint8Array(Array.from(p).concat(Array.from(hexToBytes(chk)))));
 }
 
+const WIF_MAINNET = 0x80;
+const WIF_TESTNET = 0xef;
+
+function priv32ToWif(priv32, opts) {
+    opts = opts || {};
+    const testnet = !!opts.testnet;
+    const compressed = !!opts.compressed;
+    const ver = testnet ? WIF_TESTNET : WIF_MAINNET;
+    const b = priv32 instanceof Uint8Array ? priv32 : new Uint8Array(priv32);
+    if (b.length !== 32) return '';
+    const payload = compressed
+        ? [ver].concat(Array.from(b)).concat([0x01])
+        : [ver].concat(Array.from(b));
+    return base58Check(payload);
+}
+
+function bytesToBase64Raw(u8) {
+    let s = '';
+    for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+    return btoa(s);
+}
+
+/** Returns display strings for a 64-char hex private key, or null. */
+function formatPrivateKeyAllFormats(keyHex) {
+    const hex = String(keyHex || '').trim().replace(/^0x/i, '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hex)) return null;
+    const priv32 = hexToBytes(hex);
+    const k = BigInt('0x' + hex);
+    const decStr = k.toString(10);
+    const decGrouped = decStr.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return {
+        hex: hex,
+        hex0x: '0x' + hex,
+        decimal: decStr,
+        decimalGrouped: decGrouped,
+        wifMainCompressed: priv32ToWif(priv32, { compressed: true, testnet: false }),
+        wifMainUncompressed: priv32ToWif(priv32, { compressed: false, testnet: false }),
+        wifTestCompressed: priv32ToWif(priv32, { compressed: true, testnet: true }),
+        wifTestUncompressed: priv32ToWif(priv32, { compressed: false, testnet: true }),
+        base64: bytesToBase64Raw(priv32)
+    };
+}
+
 const B32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
 const B32_GEN = [0x3b6a57b2,0x26508e6d,0x1ea119fa,0x3d4233dd,0x2a1462b3];
 function b32Polymod(v){let c=1;for(let i=0;i<v.length;i++){const d=v[i];const t=c>>25;c=((c&0x1ffffff)<<5)^d;for(let j=0;j<5;j++)if((t>>j)&1)c^=B32_GEN[j];}return c;}
@@ -760,7 +1257,48 @@ function parseCount() {
 
 let scanRunning = false;
 let scanAbort = false;
-let pageStartTime = Date.now();
+/** Set when 16G + balance bloom + SQLite agree on funded UTXOs — scan stops and shows banner. */
+let scanStoppedByHit = false;
+
+function hidePrivHitBanner() {
+    const el = document.getElementById('privHitBanner');
+    if (!el) return;
+    el.style.display = 'none';
+    el.innerHTML = '';
+}
+
+function showPrivHitBanner(confirmed) {
+    const el = document.getElementById('privHitBanner');
+    if (!el || !confirmed || !confirmed.length) return;
+    let html = '<strong>Funded match</strong> (16G bloom + balance bloom + SQLite UTXOs). Scan stopped.<br>';
+    for (let i = 0; i < confirmed.length; i++) {
+        const c = confirmed[i];
+        const balLine = formatSqliteBalanceLine(c);
+        html += '<span style="color:#333">' + esc(c.type) + '</span> \xb7 '
+            + '<a href="test.html?address=' + encodeURIComponent(c.addr) + '" target="_blank" rel="noopener">' + esc(c.addr) + '</a>'
+            + (balLine ? ' \xb7 <span style="color:#1a7a1a">' + esc(balLine) + '</span>' : '')
+            + '<br>';
+    }
+    const fmts = formatPrivateKeyAllFormats(confirmed[0].keyHex || '');
+    if (fmts) {
+        html += '<dl class="priv-key-formats">';
+        html += '<dt>Hex (64 characters)</dt><dd><code>' + esc(fmts.hex) + '</code></dd>';
+        html += '<dt>Hex with 0x prefix</dt><dd><code>' + esc(fmts.hex0x) + '</code></dd>';
+        html += '<dt>Decimal integer</dt><dd><code>' + esc(fmts.decimalGrouped) + '</code></dd>';
+        html += '<dt>WIF, mainnet, compressed</dt><dd><code>' + esc(fmts.wifMainCompressed) + '</code></dd>';
+        html += '<dt>WIF, mainnet, uncompressed</dt><dd><code>' + esc(fmts.wifMainUncompressed) + '</code></dd>';
+        html += '<dt>WIF, testnet, compressed</dt><dd><code>' + esc(fmts.wifTestCompressed) + '</code></dd>';
+        html += '<dt>WIF, testnet, uncompressed</dt><dd><code>' + esc(fmts.wifTestUncompressed) + '</code></dd>';
+        html += '<dt>Base64 (32 raw bytes)</dt><dd><code>' + esc(fmts.base64) + '</code></dd>';
+        html += '</dl>';
+    } else {
+        html += '<p style="margin-top:8px;font-size:11px">Private key hex: <code>' + esc(confirmed[0].keyHex || '') + '</code></p>';
+    }
+    el.innerHTML = html;
+    el.style.display = 'block';
+}
+/** Wall time when sequential auto started (ETA + live keys/s while scanning). */
+let scanSessionStart = Date.now();
 let totalKeysScanned = 0;
 let totalAddrChecked = 0;
 function onPrivInputsChanged() {
@@ -773,17 +1311,78 @@ function formatBigIntGrouped(n) {
 
 function updatePrivExplainer() {
     const el = document.getElementById('privExplainer');
+    const st = parseStartHex();
     const c = parseCount();
     const defs = getScanAddrDefs();
+    const addrPer = Math.max(1, defs.length);
     const parts = [];
-    parts.push('<p class="sse-line">Valid private scalars are integers <strong>1</strong> to <strong>n\u22121</strong> (curve order n). Each step uses <code>pub\u2099\u208a\u2081 = pub\u2099 + G</code> after the first full multiply.</p>');
-    if (c.ok) {
-        const addrPer = defs.length;
-        const totalBloom = BigInt(c.n) * BigInt(Math.max(1, addrPer));
-        parts.push('<p class="sse-line" style="margin-top:8px">This run would check up to <span class="sse-num">' + esc(String(c.n)) + '</span> keys \xd7 '
-            + addrPer + ' address type(s) = <span class="sse-num">' + esc(formatBigIntGrouped(totalBloom)) + '</span> bloom lookups (if the range stays valid).</p>');
+    parts.push('<p class="sse-line">Valid private scalars are integers <strong>1</strong> to <strong>n\u22121</strong> (curve order n). <strong>SPIN</strong> picks one random key in your start+width range and shows formats and addresses. <strong>auto</strong> walks the range with <code>pub\u2099\u208a\u2081 = pub\u2099 + G</code> after the first full multiply.</p>');
+
+    let keySpace = 0n;
+    let showRangeRates = false;
+    if (st.ok && c.ok) {
+        keySpace = getRangeSpanBig(st.k, c.n);
+        const logN = log10BigInt(keySpace);
+        if (keySpace > 0n) {
+            parts.push('<p class="sse-line" style="margin-top:8px"><span class="sse-num">' + esc(formatBigIntGrouped(keySpace)) + '</span> private keys in this range (truncated at the curve order).</p>');
+            const analogies = buildMnemonicAnalogyLines(logN);
+            for (let ai = 0; ai < analogies.length; ai++)
+                parts.push('<p class="sse-analogy">\u2014 ' + esc(analogies[ai]) + '</p>');
+            const totalBloom = keySpace * BigInt(addrPer);
+            parts.push('<p class="sse-line" style="margin-top:8px">Scanning the full range performs up to <span class="sse-num">' + esc(formatBigIntGrouped(totalBloom)) + '</span> bloom lookups (keys \xd7 ' + addrPer + ' address type(s)).</p>');
+            showRangeRates = true;
+        }
+    } else {
+        parts.push('<p class="sse-sub" style="margin-top:8px">Enter a valid start hex and width to see search-space size and duration estimates.</p>');
     }
-    parts.push('<p class="sse-sub">Stops early if the range would pass the curve order (invalid keys are skipped). Local bloom hits are <strong>batched</strong> (' + PRIV_FLUSH_BATCH + '+ per HTTP request, or every ' + (PRIV_FLUSH_INTERVAL_MS / 1000) + 's) for server confirmation.</p>');
+
+    parts.push('<p class="sse-sub" style="margin-top:8px">Invalid scalars are skipped near the curve order. Local bloom hits are <strong>batched</strong> (' + PRIV_FLUSH_BATCH + '+ per HTTP request, or every ' + (PRIV_FLUSH_INTERVAL_MS / 1000) + 's) for server confirmation, then the balance bloom and <strong>SQLite</strong> (<code>balance_lookup.php</code>). <strong>auto</strong> stops only when SQLite reports UTXOs for an address that passed both blooms.</p>');
+
+    if (showRangeRates && keySpace > 0n) {
+        parts.push('<div class="sse-section-title">Expected duration (this range)</div>');
+        const rates = [
+            [1e6, '1,000,000'],
+            [1e11, '100 billion'],
+            [1e21, '1,000,000,000 trillion']
+        ];
+        for (let ri = 0; ri < rates.length; ri++) {
+            const sec = approxSecondsForBigIntSpace(keySpace, rates[ri][0]);
+            parts.push('<p class="sse-rate">At ' + rates[ri][1] + ' private keys/s: <strong>' + esc(formatSearchDurationApproxSec(sec)) + '</strong></p>');
+        }
+        const elapsed = (Date.now() - pageStartTimePriv) / 1000;
+        const kpsMeas = elapsed > 0 ? (privKeysTriedTotal / elapsed) : 0;
+        if (kpsMeas > 0) {
+            const secYou = approxSecondsForBigIntSpace(keySpace, kpsMeas);
+            parts.push('<p class="sse-rate">At <strong>' + esc(kpsMeas.toFixed(2)) + '</strong> keys/s (measured on this page): <strong>' + esc(formatSearchDurationApproxSec(secYou)) + '</strong></p>');
+        } else {
+            parts.push('<p class="sse-sub">Use <strong>SPIN</strong> or <strong>auto</strong> to measure your speed; it will appear here and in the stats box below.</p>');
+        }
+    }
+
+    const fullOrder = N_ORDER - 1n;
+    const logFull = log10BigInt(fullOrder);
+    parts.push('<div class="sse-section-title" style="margin-top:12px">Full valid keyspace (n\u22121)</div>');
+    parts.push('<p class="sse-line"><span class="sse-num">' + esc(formatBigIntGrouped(fullOrder)) + '</span> possible private scalars.</p>');
+    const analogiesFull = buildMnemonicAnalogyLines(logFull);
+    for (let ai = 0; ai < Math.min(2, analogiesFull.length); ai++)
+        parts.push('<p class="sse-analogy">\u2014 ' + esc(analogiesFull[ai]) + '</p>');
+    parts.push('<div class="sse-section-title">Expected duration (full keyspace)</div>');
+    const ratesFull = [
+        [1e6, '1,000,000'],
+        [1e11, '100 billion'],
+        [1e21, '1,000,000,000 trillion']
+    ];
+    for (let ri = 0; ri < ratesFull.length; ri++) {
+        const sec = approxSecondsForBigIntSpace(fullOrder, ratesFull[ri][0]);
+        parts.push('<p class="sse-rate">At ' + ratesFull[ri][1] + ' private keys/s: <strong>' + esc(formatSearchDurationApproxSec(sec)) + '</strong></p>');
+    }
+    const elapsedF = (Date.now() - pageStartTimePriv) / 1000;
+    const kpsF = elapsedF > 0 ? (privKeysTriedTotal / elapsedF) : 0;
+    if (kpsF > 0) {
+        const secFullYou = approxSecondsForBigIntSpace(fullOrder, kpsF);
+        parts.push('<p class="sse-rate">At <strong>' + esc(kpsF.toFixed(2)) + '</strong> keys/s (measured): <strong>' + esc(formatSearchDurationApproxSec(secFullYou)) + '</strong> to exhaust the full space (illustrative)</p>');
+    }
+
     el.innerHTML = parts.join('');
 }
 
@@ -817,6 +1416,7 @@ function yieldToUi() {
 
 async function flushPrivHits() {
     if (pendingPrivHits.length === 0) return;
+    clearSqliteKeyCache();
     lastPrivFlushTime = Date.now();
     const batch = pendingPrivHits.splice(0);
     const uniqueKeys = [];
@@ -840,10 +1440,29 @@ async function flushPrivHits() {
         }
         if (confirmed.length) {
             log('server batch ' + batch.length + ' local \u2192 ' + confirmed.length + ' confirmed \xb7 ' + ms + 'ms', 'dim');
-            await checkBalanceFilter(confirmed);
-            for (let ci = 0; ci < confirmed.length; ci++) {
-                const c = confirmed[ci];
-                log('CONFIRMED ' + c.type + ' ' + c.addr + ' \xb7 key …' + (c.keyHex || '').slice(-12), c.balFound ? 'ok' : 'data');
+            const balRes = await checkBalanceFilter(confirmed);
+            if (!balRes.ok) {
+                log('balance bloom request failed; continuing scan', 'err');
+            } else {
+                const bloomPos = confirmed.filter(function(f) { return f.balFound === true; });
+                if (!bloomPos.length) {
+                    log('16G server matched but balance bloom has no hit; continuing scan', 'dim');
+                } else {
+                    await enrichHistoryCandidatesWithSqlite(bloomPos);
+                    const funded = bloomPos.filter(function(f) { return f.sqliteHasUtxo === true; });
+                    if (!funded.length) {
+                        log('balance bloom positive but SQLite shows no UTXOs; continuing scan', 'dim');
+                    } else {
+                        for (let ci = 0; ci < funded.length; ci++) {
+                            const c = funded[ci];
+                            const line = formatSqliteBalanceLine(c);
+                            log('FUNDED ' + c.type + ' ' + c.addr + ' \xb7 ' + line + ' \xb7 key …' + (c.keyHex || '').slice(-12), 'ok');
+                        }
+                        scanAbort = true;
+                        scanStoppedByHit = true;
+                        showPrivHitBanner(funded);
+                    }
+                }
             }
         } else if (batch.length) {
             log('server batch ' + batch.length + ' local \u2192 0 confirmed (false positives) \xb7 ' + ms + 'ms', 'dim');
@@ -868,7 +1487,8 @@ async function maybeFlushPrivHits(force) {
 }
 
 function setScanUi(running) {
-    document.getElementById('btnScan').textContent = running ? 'Stop' : 'Start scan';
+    const btnSpin = document.getElementById('btnSpin');
+    if (btnSpin) btnSpin.disabled = running || spinBusy;
     document.getElementById('privStartHex').disabled = running;
     document.getElementById('privCount').disabled = running;
     ['addr44','addr49','addr84','addr86'].forEach(function(id) {
@@ -878,7 +1498,7 @@ function setScanUi(running) {
 }
 
 function updateScanStats(currentOffset, totalCount) {
-    const elapsed = (Date.now() - pageStartTime) / 1000;
+    const elapsed = (Date.now() - scanSessionStart) / 1000;
     const kps = elapsed > 0 ? (totalKeysScanned / elapsed).toFixed(0) : '0';
     const aps = elapsed > 0 ? (totalAddrChecked / elapsed).toFixed(0) : '0';
     let html = totalKeysScanned.toLocaleString() + ' keys \xb7 ' + kps + ' keys/s \xb7 '
@@ -908,7 +1528,7 @@ function formatEta(sec) {
     return Math.round(sec / 86400) + 'd';
 }
 
-async function toggleScan() {
+async function runSequentialScan() {
     if (scanRunning) {
         scanAbort = true;
         return;
@@ -956,8 +1576,10 @@ async function toggleScan() {
 
     scanRunning = true;
     scanAbort = false;
+    scanStoppedByHit = false;
+    hidePrivHitBanner();
     setScanUi(true);
-    pageStartTime = Date.now();
+    scanSessionStart = Date.now();
     totalKeysScanned = 0;
     totalAddrChecked = 0;
     log('scan start at offset ' + offset + ' \xb7 +G fast path', 'hi');
@@ -969,7 +1591,7 @@ async function toggleScan() {
     try {
         for (let step = offset; step < cnt.n; step++) {
             if (scanAbort) {
-                log('stopped by user', 'dim');
+                log(scanStoppedByHit ? 'stopped: funded match (SQLite UTXOs)' : 'stopped by user', scanStoppedByHit ? 'ok' : 'dim');
                 break;
             }
             if (kCurrent >= N_ORDER || kCurrent === 0n) {
@@ -997,8 +1619,10 @@ async function toggleScan() {
                 }
             }
             totalKeysScanned++;
+            privKeysTriedTotal++;
 
             await maybeFlushPrivHits(false);
+            if (scanAbort) break;
 
             resumeNext = step + 1;
             if (resumeNext % CHECKPOINT_EVERY === 0)
@@ -1020,6 +1644,7 @@ async function toggleScan() {
 
             if ((step - offset + 1) % YIELD_KEYS === 0) {
                 updateScanStats(nextStep, cnt.n);
+                updatePrivExplainer();
                 await yieldToUi();
             }
         }
@@ -1033,8 +1658,14 @@ async function toggleScan() {
         lastPrivFlushTime = Date.now();
         scanRunning = false;
         scanAbort = false;
+        scanStoppedByHit = false;
         setScanUi(false);
+        setSpinBtnAfterPriv();
+        const chkAuto = document.getElementById('chkAuto');
+        if (chkAuto) chkAuto.checked = false;
         updateScanStats(Math.min(cnt.n, resumeNext), cnt.n);
+        updatePrivIdleStats();
+        updatePrivExplainer();
     }
 }
 
@@ -1045,6 +1676,11 @@ window.addEventListener('DOMContentLoaded', async function() {
     document.getElementById('btnDebugToggle').addEventListener('click', function() {
         setDebugMode(!debugMode);
         updateDebugUiVisibility();
+    });
+    const clrCp = document.getElementById('btnClearCheckpoint');
+    if (clrCp) clrCp.addEventListener('click', function() {
+        clearCheckpoint();
+        updatePrivExplainer();
     });
     await refreshIDBState();
     updatePrivExplainer();
@@ -1067,6 +1703,8 @@ window.addEventListener('DOMContentLoaded', async function() {
     updateDebugUiVisibility();
     const __pc = parseCount();
     updateScanStats(0, __pc.ok ? __pc.n : 1);
+    updatePrivIdleStats();
+    setSpinBtnAfterPriv();
 });
 </script>
 </body>
