@@ -157,11 +157,11 @@
             line-height: 1.5;
             color: #333;
         }
-        .scan-space-box .sse-lbl { font-weight: 600; color: #444; margin: 10px 0 4px 0; }
-        .scan-space-box .sse-lbl:first-child { margin-top: 0; }
         .scan-space-box .sse-line { margin: 0 0 6px 0; color: #333; }
-        .scan-space-box .sse-sub { font-size: 11px; color: #555; margin: 0 0 3px 0; font-family: monospace; }
-        .scan-space-box .sse-foot { font-size: 10px; color: #888; margin: 10px 0 0 0; }
+        .scan-space-box .sse-num { font-family: monospace; font-size: 11px; word-break: break-all; color: #111; }
+        .scan-space-box .sse-sub { font-size: 11px; color: #555; margin: 0 0 4px 0; }
+        .scan-space-box .sse-analogy { font-size: 11px; color: #555; margin: 0 0 5px 0; padding-left: 0; }
+        .scan-space-box .sse-rate { font-size: 11px; color: #444; margin: 0 0 4px 0; font-family: monospace; }
 
         /* single-spin address table */
         .res-link  { font-size: 11px; color: #888; text-decoration: none; flex-shrink: 0; }
@@ -899,6 +899,14 @@ function loadLockState() {
     } catch (_) {}
 }
 
+/** First visit (no saved locks): 11 slots locked to "abandon", last slot free to spin. */
+function applyDefaultAbandonLocks() {
+    for (let i = 0; i < 11; i++) slotLocks[i] = true;
+    slotLocks[11] = false;
+    currentWords = Array(12).fill('abandon');
+    saveLockState();
+}
+
 function copyWords() {
     if (!currentWords) return;
     navigator.clipboard.writeText(currentWords.join(' ')).then(function() {
@@ -1490,12 +1498,30 @@ function formatSearchDurationApproxSec(sec) {
     return '\u2248 10^' + Math.log10(mult).toFixed(1) + ' \u00d7 age of the universe';
 }
 
+function buildMnemonicAnalogyLines(logN) {
+    const out = [];
+    if (logN >= 78)
+        out.push('Roughly comparable in order of magnitude to common estimates for atoms in the observable universe (\u224810\u2078\u2070).');
+    else if (logN >= 50)
+        out.push('Vastly larger than rough estimates for atoms in Earth (\u224810\u2075\u2070).');
+    if (logN >= 24) {
+        const diff = logN - 24;
+        out.push('About 10^' + diff.toFixed(1) + ' times more combinations than stars in the observable universe (often quoted around 10\u00b2\u2074).');
+    } else if (logN >= 18) {
+        out.push('Larger than rough estimates for grains of sand on Earth (\u224810\u00b9\u2078\u201310\u00b9\u2079).');
+    } else if (logN >= 10) {
+        out.push('Larger than the number of people on Earth (\u224810\u2079).');
+    }
+    return out.slice(0, 3);
+}
+
 function updateMnemonicSpaceExplainer() {
     const el = document.getElementById('scanSpaceExplainer');
     if (!el) return;
     const locked = slotLocks.filter(Boolean).length;
     const free = 12 - locked;
     const space = powBigInt(2048, free);
+    const logN = log10BigInt(space);
     let scanCfg = { perPathCount: 5, enabledPaths: [] };
     try {
         scanCfg = getScanConfig();
@@ -1505,13 +1531,14 @@ function updateMnemonicSpaceExplainer() {
     const sps = elapsed > 0 ? (totalSpins / elapsed) : 0;
 
     const parts = [];
-    parts.push('<div class="sse-lbl">Search space (unlocked word slots)</div>');
-    parts.push('<p class="sse-line">' + free + ' slot' + (free === 1 ? ' is' : 's are') + ' unlocked; each uses one of 2,048 BIP39 words.</p>');
+    parts.push('<p class="sse-line"><span class="sse-num">' + esc(formatBigIntGrouped(space)) + '</span> possible mnemonics</p>');
+    parts.push('<p class="sse-sub">' + free + ' word slot' + (free === 1 ? ' is' : 's are') + ' unlocked; each picks one of 2,048 BIP39 words.</p>');
+    const analogies = buildMnemonicAnalogyLines(logN);
+    for (let ai = 0; ai < analogies.length; ai++)
+        parts.push('<p class="sse-analogy">\u2014 ' + esc(analogies[ai]) + '</p>');
 
-    parts.push('<div class="sse-lbl">This spin (addresses)</div>');
-    parts.push('<p class="sse-line">' + nAddr.toLocaleString() + ' address' + (nAddr === 1 ? '' : 'es') + '.</p>');
+    parts.push('<p class="sse-line" style="margin-top:8px">' + nAddr.toLocaleString() + ' address' + (nAddr === 1 ? '' : 'es') + ' checked per spin (enabled paths \u00d7 \u201cper path\u201d indexes).</p>');
 
-    parts.push('<div class="sse-lbl">Time to exhaust mnemonic space at a fixed try rate</div>');
     const rates = [
         [1e6, '1,000,000'],
         [1e9, '1 billion'],
@@ -1519,13 +1546,14 @@ function updateMnemonicSpaceExplainer() {
     ];
     for (let ri = 0; ri < rates.length; ri++) {
         const sec = approxSecondsForBigIntSpace(space, rates[ri][0]);
-        parts.push('<p class="sse-sub">' + rates[ri][1] + '/s: ' + esc(formatSearchDurationApproxSec(sec)) + '</p>');
+        parts.push('<p class="sse-rate">At ' + rates[ri][1] + ' mnemonics/s: <strong>' + esc(formatSearchDurationApproxSec(sec)) + '</strong></p>');
     }
     if (sps > 0) {
         const secYou = approxSecondsForBigIntSpace(space, sps);
-        parts.push('<p class="sse-sub">This page (' + esc(sps.toFixed(2)) + ' spins/s): ' + esc(formatSearchDurationApproxSec(secYou)) + '</p>');
+        parts.push('<p class="sse-rate">At <strong>' + esc(sps.toFixed(2)) + '</strong> spins/s (measured on this page): <strong>' + esc(formatSearchDurationApproxSec(secYou)) + '</strong></p>');
+    } else {
+        parts.push('<p class="sse-sub">Spin once to measure your speed; it will appear here and in the stats box below.</p>');
     }
-    parts.push('<p class="sse-foot">Educational only: one \u201ctry\u201d = one mnemonic drawn by the slot machine; real attacks and hardware differ.</p>');
     el.innerHTML = parts.join('');
 }
 
@@ -1821,8 +1849,12 @@ async function _doSpin(fixedWords, opts) {
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async function() {
+    const urlParam0 = new URLSearchParams(window.location.search).get('m');
     buildGrid();
     loadLockState();
+    if (!localStorage.getItem(LOCK_STATE_KEY) && !urlParam0) {
+        applyDefaultAbandonLocks();
+    }
     loadScanSettings();
     renderCurrentWordsToSlots();
     renderAllSlotLocks();
@@ -1852,10 +1884,9 @@ window.addEventListener('DOMContentLoaded', async function() {
     }
 
     // If URL has a mnemonic, spin with it immediately (doSpin auto-downloads filter if needed)
-    const urlParam = new URLSearchParams(window.location.search).get('m');
-    if (urlParam) {
+    if (urlParam0) {
         try {
-            const words = urlParamToWords(urlParam);
+            const words = urlParamToWords(urlParam0);
             if (words) doSpin(words);
         } catch(e) {
             log('could not decode URL mnemonic', 'err');
