@@ -145,6 +145,23 @@
             font-family: monospace;
             font-size: 11px;
         }
+        .scan-block { margin-bottom: 8px; }
+        .scan-space-box {
+            margin-top: 8px;
+            padding: 8px 10px;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background: #f9f9fb;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 12px;
+            line-height: 1.5;
+            color: #333;
+        }
+        .scan-space-box .sse-lbl { font-weight: 600; color: #444; margin: 10px 0 4px 0; }
+        .scan-space-box .sse-lbl:first-child { margin-top: 0; }
+        .scan-space-box .sse-line { margin: 0 0 6px 0; color: #333; }
+        .scan-space-box .sse-sub { font-size: 11px; color: #555; margin: 0 0 3px 0; font-family: monospace; }
+        .scan-space-box .sse-foot { font-size: 10px; color: #888; margin: 10px 0 0 0; }
 
         /* single-spin address table */
         .res-link  { font-size: 11px; color: #888; text-decoration: none; flex-shrink: 0; }
@@ -287,15 +304,18 @@
     <label class="auto-label"><input type="checkbox" id="chkAuto" onchange="onAutoChange()"> auto</label>
     <button id="btnCopy" onclick="copyWords()">copy</button>
 </div>
+<div class="scan-block">
 <div class="scan-row">
     <span>Paths:</span>
     <div class="scan-paths">
-        <label><input type="checkbox" id="path44" checked onchange="saveScanSettings()">Legacy <span class="path-type">P2PKH</span> (44)</label>
-        <label><input type="checkbox" id="path49" checked onchange="saveScanSettings()">Nested SegWit <span class="path-type">P2SH-P2WPKH</span> (49)</label>
-        <label><input type="checkbox" id="path84" checked onchange="saveScanSettings()">Native SegWit <span class="path-type">P2WPKH</span> (84)</label>
-        <label><input type="checkbox" id="path86" checked onchange="saveScanSettings()">Taproot <span class="path-type">P2TR</span> (86)</label>
+        <label><input type="checkbox" id="path44" checked onchange="saveScanSettings(true)">Legacy <span class="path-type">P2PKH</span> (44)</label>
+        <label><input type="checkbox" id="path49" checked onchange="saveScanSettings(true)">Nested SegWit <span class="path-type">P2SH-P2WPKH</span> (49)</label>
+        <label><input type="checkbox" id="path84" checked onchange="saveScanSettings(true)">Native SegWit <span class="path-type">P2WPKH</span> (84)</label>
+        <label><input type="checkbox" id="path86" checked onchange="saveScanSettings(true)">Taproot <span class="path-type">P2TR</span> (86)</label>
     </div>
-    <span class="scan-idx">Per path: <input type="number" id="pathCount" min="1" max="2000" step="1" value="5" oninput="saveScanSettings()" onchange="saveScanSettings()"></span>
+    <span class="scan-idx">Per path: <input type="number" id="pathCount" min="1" max="2000" step="1" value="5" oninput="saveScanSettings(false)" onchange="saveScanSettings(true)"></span>
+</div>
+<div id="scanSpaceExplainer" class="scan-space-box" aria-live="polite"></div>
 </div>
 <div id="eduStatsBox">
     <div id="eduStatsTop">Waiting for first spin…</div>
@@ -822,7 +842,7 @@ const stateSpinCounts = Object.create(null);
 const LOCK_STATE_KEY = 'btc_slot_lock_state_v1';
 const SCAN_SETTINGS_KEY = 'btc_scan_settings_v1';
 
-function saveScanSettings() {
+function saveScanSettings(resetProgress) {
     try {
         const pc = document.getElementById('pathCount');
         localStorage.setItem(SCAN_SETTINGS_KEY, JSON.stringify({
@@ -833,6 +853,8 @@ function saveScanSettings() {
             pathCount: pc ? parseInt(pc.value, 10) : 5
         }));
     } catch (_) {}
+    if (resetProgress) resetSearchProgress();
+    else updateMnemonicSpaceExplainer();
 }
 
 function loadScanSettings() {
@@ -860,6 +882,7 @@ function saveLockState() {
             words: currentWords ? currentWords.slice() : null
         }));
     } catch (_) {}
+    updateMnemonicSpaceExplainer();
 }
 
 function loadLockState() {
@@ -1052,7 +1075,7 @@ function toggleWordLock(idx, ev) {
     slotLocks[idx] = !slotLocks[idx];
     renderSlotLockState(idx);
     saveLockState();
-    updateAutoStats();
+    resetSearchProgress();
 }
 
 // ── AUTOSPIN ──────────────────────────────────────────────────────────────────
@@ -1065,7 +1088,17 @@ let lastMatchTime    = null;
 let lastSpinHadFundedMatch = false;
 let lastSpinExhaustiveDone = false;
 let lastSpinFundedWords = '';
-const pageStartTime  = Date.now();
+let pageStartTime  = Date.now();
+
+function resetSearchProgress() {
+    for (const k in stateSpinCounts) delete stateSpinCounts[k];
+    totalSpins = 0;
+    totalAddresses = 0;
+    spinsAtLastMatch = 0;
+    lastMatchTime = null;
+    pageStartTime = Date.now();
+    updateAutoStats();
+}
 
 // Pending local hits waiting for a batched server check
 const FLUSH_INTERVAL_MS = 1000;
@@ -1233,6 +1266,10 @@ function formatBigIntShort(n) {
     return mant[0] + '.' + mant[1] + mant[2] + frac + 'e' + (s.length - 1);
 }
 
+function formatBigIntGrouped(n) {
+    return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
 function formatDuration(sec) {
     if (!isFinite(sec) || sec < 0) return 'n/a';
     if (sec < 1) return '<1s';
@@ -1351,7 +1388,7 @@ function updateAutoStats() {
 
     document.getElementById('eduStatsTop').innerHTML =
         'Speed: ' + spsAll + '/s'
-        + ' <span class="stat-sep">·</span> Space: ' + formatBigIntShort(totalComb)
+        + ' <span class="stat-sep">·</span> Space: ' + formatBigIntGrouped(totalComb)
         + ' <span class="stat-sep">·</span> ETA: ' + eta;
     if (fill) {
         fill.style.width = widthPct + '%';
@@ -1359,6 +1396,7 @@ function updateAutoStats() {
         else fill.style.minWidth = '0';
     }
     document.getElementById('eduProgressText').textContent = 'Progress: ' + progressPct;
+    updateMnemonicSpaceExplainer();
 }
 
 function setAutoSpin(val) {
@@ -1423,6 +1461,72 @@ function getScanConfig() {
         return !!(el && el.checked);
     });
     return { perPathCount, enabledPaths: enabled };
+}
+
+const AGE_UNIVERSE_YEARS = 13.8e9;
+
+function log10BigInt(n) {
+    if (n <= 0n) return -Infinity;
+    const s = n.toString();
+    const d = s.length;
+    if (d <= 15) return Math.log10(Number(n));
+    const head = s.slice(0, 15);
+    return Math.log10(parseInt(head, 10)) + (d - 15);
+}
+
+function approxSecondsForBigIntSpace(space, triesPerSec) {
+    if (triesPerSec <= 0 || !isFinite(triesPerSec)) return Infinity;
+    return Math.pow(10, log10BigInt(space) - Math.log10(triesPerSec));
+}
+
+function formatSearchDurationApproxSec(sec) {
+    if (!isFinite(sec) || sec < 0) return 'n/a';
+    if (sec < 0.5) return 'under a second';
+    if (sec < 31536000) return formatDuration(sec) + ' (approx.)';
+    const years = sec / 31536000;
+    if (years < AGE_UNIVERSE_YEARS) return years.toPrecision(4) + ' yr (approx.)';
+    const mult = years / AGE_UNIVERSE_YEARS;
+    if (mult < 1e9) return '\u2248 ' + mult.toPrecision(4) + ' \u00d7 age of the universe (\u224813.8 billion yr)';
+    return '\u2248 10^' + Math.log10(mult).toFixed(1) + ' \u00d7 age of the universe';
+}
+
+function updateMnemonicSpaceExplainer() {
+    const el = document.getElementById('scanSpaceExplainer');
+    if (!el) return;
+    const locked = slotLocks.filter(Boolean).length;
+    const free = 12 - locked;
+    const space = powBigInt(2048, free);
+    let scanCfg = { perPathCount: 5, enabledPaths: [] };
+    try {
+        scanCfg = getScanConfig();
+    } catch (err) {}
+    const nAddr = Math.max(0, scanCfg.enabledPaths.length) * scanCfg.perPathCount;
+    const elapsed = (Date.now() - pageStartTime) / 1000;
+    const sps = elapsed > 0 ? (totalSpins / elapsed) : 0;
+
+    const parts = [];
+    parts.push('<div class="sse-lbl">Search space (unlocked word slots)</div>');
+    parts.push('<p class="sse-line">' + free + ' slot' + (free === 1 ? ' is' : 's are') + ' unlocked; each uses one of 2,048 BIP39 words.</p>');
+
+    parts.push('<div class="sse-lbl">This spin (addresses)</div>');
+    parts.push('<p class="sse-line">' + nAddr.toLocaleString() + ' address' + (nAddr === 1 ? '' : 'es') + '.</p>');
+
+    parts.push('<div class="sse-lbl">Time to exhaust mnemonic space at a fixed try rate</div>');
+    const rates = [
+        [1e6, '1,000,000'],
+        [1e9, '1 billion'],
+        [1e12, '1 trillion']
+    ];
+    for (let ri = 0; ri < rates.length; ri++) {
+        const sec = approxSecondsForBigIntSpace(space, rates[ri][0]);
+        parts.push('<p class="sse-sub">' + rates[ri][1] + '/s: ' + esc(formatSearchDurationApproxSec(sec)) + '</p>');
+    }
+    if (sps > 0) {
+        const secYou = approxSecondsForBigIntSpace(space, sps);
+        parts.push('<p class="sse-sub">This page (' + esc(sps.toFixed(2)) + ' spins/s): ' + esc(formatSearchDurationApproxSec(secYou)) + '</p>');
+    }
+    parts.push('<p class="sse-foot">Educational only: one \u201ctry\u201d = one mnemonic drawn by the slot machine; real attacks and hardware differ.</p>');
+    el.innerHTML = parts.join('');
 }
 
 // ── SPIN ──────────────────────────────────────────────────────────────────────
