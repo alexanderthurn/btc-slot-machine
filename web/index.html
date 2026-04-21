@@ -286,7 +286,7 @@
 </div>
 
 <div class="spin-row">
-    <button id="btnSpin" onclick="doSpin()">SPIN</button>
+    <button type="button" id="btnSpin" onclick="doSpin()">SPIN</button>
     <label class="auto-label"><input type="checkbox" id="chkAuto" onchange="onAutoChange()"> auto</label>
     <button id="btnCopy" onclick="copyWords()">copy</button>
     <span id="statusLine">No filter loaded — load one below or spin to auto-download the 512M filter.</span>
@@ -294,12 +294,12 @@
 <div class="scan-row">
     <span>Paths:</span>
     <div class="scan-paths">
-        <label><input type="checkbox" id="path44" checked>44</label>
-        <label><input type="checkbox" id="path49" checked>49</label>
-        <label><input type="checkbox" id="path84" checked>84</label>
-        <label><input type="checkbox" id="path86" checked>86</label>
+        <label><input type="checkbox" id="path44" checked onchange="saveScanSettings()">Legacy (44)</label>
+        <label><input type="checkbox" id="path49" checked onchange="saveScanSettings()">Nested SegWit (49)</label>
+        <label><input type="checkbox" id="path84" checked onchange="saveScanSettings()">Native SegWit (84)</label>
+        <label><input type="checkbox" id="path86" checked onchange="saveScanSettings()">Taproot (86)</label>
     </div>
-    <span class="scan-idx">Per path: <input type="number" id="pathCount" min="1" max="2000" step="1" value="20"></span>
+    <span class="scan-idx">Per path: <input type="number" id="pathCount" min="1" max="2000" step="1" value="5" oninput="saveScanSettings()" onchange="saveScanSettings()"></span>
 </div>
 <div id="eduStatsBox">
     <div id="eduStatsTop">Waiting for first spin…</div>
@@ -812,6 +812,38 @@ let currentWords = null;
 const slotLocks = Array(12).fill(false);
 const stateSpinCounts = Object.create(null);
 const LOCK_STATE_KEY = 'btc_slot_lock_state_v1';
+const SCAN_SETTINGS_KEY = 'btc_scan_settings_v1';
+
+function saveScanSettings() {
+    try {
+        const pc = document.getElementById('pathCount');
+        localStorage.setItem(SCAN_SETTINGS_KEY, JSON.stringify({
+            path44: !!(document.getElementById('path44') && document.getElementById('path44').checked),
+            path49: !!(document.getElementById('path49') && document.getElementById('path49').checked),
+            path84: !!(document.getElementById('path84') && document.getElementById('path84').checked),
+            path86: !!(document.getElementById('path86') && document.getElementById('path86').checked),
+            pathCount: pc ? parseInt(pc.value, 10) : 5
+        }));
+    } catch (_) {}
+}
+
+function loadScanSettings() {
+    try {
+        const raw = localStorage.getItem(SCAN_SETTINGS_KEY);
+        if (!raw) return;
+        const s = JSON.parse(raw);
+        const ids = ['path44', 'path49', 'path84', 'path86'];
+        for (let i = 0; i < ids.length; i++) {
+            const el = document.getElementById(ids[i]);
+            if (!el) continue;
+            const k = ids[i];
+            if (typeof s[k] === 'boolean') el.checked = s[k];
+        }
+        const pc = document.getElementById('pathCount');
+        if (pc && typeof s.pathCount === 'number' && s.pathCount >= 1 && s.pathCount <= 2000 && isFinite(s.pathCount))
+            pc.value = String(s.pathCount);
+    } catch (_) {}
+}
 
 function saveLockState() {
     try {
@@ -996,6 +1028,7 @@ function toggleWordLock(idx, ev) {
 
 // ── AUTOSPIN ──────────────────────────────────────────────────────────────────
 let autoSpinning     = false;
+let spinBusy         = false;
 let totalSpins       = 0;
 let totalAddresses   = 0;
 let spinsAtLastMatch = 0;
@@ -1303,16 +1336,25 @@ function setAutoSpin(val) {
     document.getElementById('chkAuto').checked = val;
 }
 
+function yieldToUi() {
+    return new Promise(function(res) {
+        requestAnimationFrame(function() { requestAnimationFrame(res); });
+    });
+}
+
 async function onAutoChange() {
     if (!document.getElementById('chkAuto').checked) {
         autoSpinning = false;
         await flushPendingHits();
+        setSpinBtnAfterSpin(document.getElementById('btnSpin'));
         return;
     }
     autoSpinning = true;
+    setSpinBtnAfterSpin(document.getElementById('btnSpin'));
     lastFlushTime = Date.now();
     while (autoSpinning) {
         await doSpin();
+        await yieldToUi();
         if (lastSpinHadFundedMatch) {
             autoSpinning = false;
             document.getElementById('chkAuto').checked = false;
@@ -1333,11 +1375,12 @@ async function onAutoChange() {
     await flushPendingHits();
     document.getElementById('resultsBox').style.display = DEBUG_MODE ? 'block' : 'none';
     document.getElementById('btnCopy').style.display = '';
+    setSpinBtnAfterSpin(document.getElementById('btnSpin'));
 }
 
 function getScanConfig() {
-    const raw = parseInt((document.getElementById('pathCount') || {}).value || '20', 10);
-    const perPathCount = Math.max(1, Math.min(2000, isFinite(raw) ? raw : 20));
+    const raw = parseInt((document.getElementById('pathCount') || {}).value || '5', 10);
+    const perPathCount = Math.max(1, Math.min(2000, isFinite(raw) ? raw : 5));
 
     const allPathDefs = [
         { id: 'path44', path: "m/44'/0'/0'/0", type: 'P2PKH',       fn: addrP2PKH },
@@ -1354,9 +1397,27 @@ function getScanConfig() {
 }
 
 // ── SPIN ──────────────────────────────────────────────────────────────────────
+function setSpinBtnAfterSpin(btn) {
+    if (!btn) return;
+    btn.disabled = !!autoSpinning || spinBusy;
+}
+
 async function doSpin(fixedWords, opts) {
-    try { return await _doSpin(fixedWords, opts); }
-    catch(e) { log('ERROR: ' + e.message + (e.stack ? '\n' + e.stack.split('\n')[1] : ''), 'err'); document.getElementById('btnSpin').disabled = false; return false; }
+    opts = opts || {};
+    const continuation = opts.continuation === true;
+    if (!continuation) {
+        if (spinBusy) return;
+        spinBusy = true;
+    }
+    try {
+        return await _doSpin(fixedWords, opts);
+    } catch(e) {
+        log('ERROR: ' + e.message + (e.stack ? '\n' + e.stack.split('\n')[1] : ''), 'err');
+        return false;
+    } finally {
+        if (!continuation) spinBusy = false;
+        setSpinBtnAfterSpin(document.getElementById('btnSpin'));
+    }
 }
 async function _doSpin(fixedWords, opts) {
     lastSpinHadFundedMatch = false;
@@ -1396,11 +1457,10 @@ async function _doSpin(fixedWords, opts) {
     const scanCfg = getScanConfig();
     const pathDefs = scanCfg.enabledPaths;
     const perPathCount = scanCfg.perPathCount;
-    if (pathDefs.length === 0) {
+        if (pathDefs.length === 0) {
         document.getElementById('statusLine').textContent = 'Select at least one derivation path.';
         if (!isAuto) log('no derivation path selected', 'err');
         if (isAuto) setAutoSpin(false);
-        btn.disabled = false;
         if (!isAuto) renderSingleSpinResults(words, []);
         return false;
     }
@@ -1477,7 +1537,6 @@ async function _doSpin(fixedWords, opts) {
 
         if (found.length === 0) {
             if (!isAuto) log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 no match', 'data');
-            btn.disabled = false;
             registerSpinForCurrentState();
             totalAddresses += checked;
             lastSpinExhaustiveDone = isCurrentStateExhausted();
@@ -1501,7 +1560,6 @@ async function _doSpin(fixedWords, opts) {
             } catch(e) { log('server error: ' + e.message, 'err'); }
             if (!found.some(function(f) { return f.serverFound === true; })) {
                 log('false positive \xb7 skipping remaining selected addresses', 'dim');
-                btn.disabled = false;
                 registerSpinForCurrentState();
                 totalAddresses += checked;
                 updateAutoStats();
@@ -1592,8 +1650,7 @@ async function _doSpin(fixedWords, opts) {
         await filterClick(512, 32);
         if (cf.view) {
             if (!isAuto) log('filter ready \u2014 re-checking\u2026', 'dim');
-            btn.disabled = false;
-            return await doSpin(words);
+            return await doSpin(words, { continuation: true });
         }
         checked = 0;
     }
@@ -1669,7 +1726,6 @@ async function _doSpin(fixedWords, opts) {
 
     if (!isAuto) document.getElementById('btnCopy').style.display = '';
     if (!isAuto) renderSingleSpinResults(words, derivedRows);
-    btn.disabled = false;
     registerSpinForCurrentState();
     totalAddresses += checked;
     lastSpinExhaustiveDone = isCurrentStateExhausted();
@@ -1681,6 +1737,7 @@ async function _doSpin(fixedWords, opts) {
 window.addEventListener('DOMContentLoaded', async function() {
     buildGrid();
     loadLockState();
+    loadScanSettings();
     renderCurrentWordsToSlots();
     renderAllSlotLocks();
     updateDebugUiVisibility();
