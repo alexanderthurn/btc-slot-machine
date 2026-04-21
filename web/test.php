@@ -29,9 +29,7 @@ $tabM = 63;
 
 $allFilters = [
     ['file' => '16384mb.bin',    'bits' => 37, 'label' => 'all-addresses (32-byte key)'],
-    ['file' => '512mb.bin',      'bits' => 32, 'label' => 'all-addresses (32-byte key)'],
     ['file' => '16384mb_bal.bin','bits' => 37, 'label' => 'balance (32-byte key)'],
-    ['file' => '512mb_bal.bin',  'bits' => 32, 'label' => 'balance (32-byte key)'],
 ];
 
 $results = [];

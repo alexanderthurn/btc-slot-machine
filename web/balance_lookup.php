@@ -6,6 +6,7 @@
 // Optional: &limit=<1..200> (default 50, for key32-only queries)
 
 header('Content-Type: application/json; charset=utf-8');
+$tStart = microtime(true);
 
 $dbPath = __DIR__ . '/filter/balance_utxo.sqlite';
 if (!is_readable($dbPath)) {
@@ -61,8 +62,10 @@ try {
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
     ]);
     $st = $pdo->prepare($sql);
+    $qStart = microtime(true);
     $st->execute($params);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $queryMs = round((microtime(true) - $qStart) * 1000, 3);
     $totalSat = 0;
     foreach ($rows as $r) {
         $totalSat += (int)$r['value_sat'];
@@ -73,6 +76,8 @@ try {
         'total_sat' => $totalSat,
         'rows' => $rows,
         'limit' => $limit,
+        'query_ms' => $queryMs,
+        'time_total_ms' => round((microtime(true) - $tStart) * 1000, 3),
     ], JSON_UNESCAPED_SLASHES);
 } catch (Throwable $e) {
     echo json_encode(['ok' => false, 'error' => $e->getMessage()], JSON_UNESCAPED_SLASHES);

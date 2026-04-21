@@ -26,6 +26,22 @@
         .hdr a  { font-size: 12px; color: #666; text-decoration: none; }
         .hdr a:hover { text-decoration: underline; }
 
+        .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+        .tab-btn {
+            padding: 5px 10px;
+            border: 1px solid #ccc;
+            background: #fafafa;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .tab-btn.active {
+            border-color: #666;
+            background: #f0f0f0;
+        }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
         hr { border: none; border-top: 1px solid #ddd; margin: 10px 0; }
 
         /* input */
@@ -163,6 +179,9 @@
         #mnWarn.ok { color: #1a7a1a; }
         #mnWarn.warn { color: #b8860b; }
         #mnWarn.err { color: #c33; }
+        .dl-wrap { margin-top: 6px; margin-bottom: 4px; }
+        .dl-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+        .dl-note { font-size: 11px; color: #666; margin-top: 4px; }
     </style>
 </head>
 <body>
@@ -172,6 +191,12 @@
     <a href="index.html">← Slot Machine</a>
 </div>
 
+<div class="tabs">
+    <button id="tabBtnAddress" class="tab-btn active" onclick="setTab('address')">Address Check</button>
+    <button id="tabBtnWords" class="tab-btn" onclick="setTab('words')">Word Check</button>
+</div>
+
+<div id="tabAddress" class="tab-panel active">
 <div class="input-row">
     <input type="text" id="valInput"
            placeholder="address / hash160 / pubkey"
@@ -179,17 +204,9 @@
     <button id="btnCheck" onclick="verifyInput()">Check</button>
 </div>
 
-<div id="resultBox"><span style="color:#bbb">—</span></div>
-
-<div class="sec-lbl">SQLite (`balance_utxo.sqlite`)</div>
-<div id="sqliteBox" class="sqlite-box"><span style="color:#bbb">—</span></div>
-
-<hr>
-
 <div class="filter-row">
     <span class="filter-lbl">Local Filter:</span>
     <button class="cf-btn" data-mb="512"   data-bits="32" onclick="filterClick(512,32)">512M</button>
-    <button class="cf-btn" data-mb="16384" data-bits="37" onclick="filterClick(16384,37)">16G</button>
 </div>
 
 <div class="idb-row" id="idbRow" style="display:none">
@@ -205,14 +222,42 @@
     </div>
 </div>
 
+<div id="resultBox"><span style="color:#bbb">—</span></div>
+
+<div class="sec-lbl">SQLite (`balance_utxo.sqlite`)</div>
+<div id="sqliteBox" class="sqlite-box"><span style="color:#bbb">—</span></div>
+
+<div class="log-hdr">
+    <span class="log-lbl">Log</span>
+    <button class="log-clr" onclick="clearLog()">clear</button>
+</div>
+<div class="log-box" id="logConsole"></div>
+
+<hr>
+
+<div class="dl-wrap">
+    <div class="sec-lbl">Download Artifacts</div>
+    <div class="dl-row">
+        <button class="cf-btn" onclick="downloadArtifact('filter/16384mb.bin')">16384mb.bin</button>
+        <button class="cf-btn" onclick="downloadArtifact('filter/512mb.bin')">512mb.bin</button>
+        <button class="cf-btn" onclick="downloadArtifact('filter/16384mb_bal.bin')">16384mb_bal.bin</button>
+        <button class="cf-btn" onclick="downloadArtifact('filter/512mb_bal.bin')">512mb_bal.bin</button>
+        <button class="cf-btn" onclick="downloadArtifact('filter/balance_utxo.sqlite')">balance_utxo.sqlite</button>
+    </div>
+    <div class="dl-row">
+        <button class="cf-btn" onclick="downloadAllArtifacts()">Download all</button>
+    </div>
+    <div class="dl-note">Resuming is handled by your browser/download manager when the server supports HTTP range requests.</div>
+</div>
+
 <div id="histBox" style="display:none">
     <hr>
     <div class="sec-lbl">Recent</div>
     <div id="histList"></div>
 </div>
+</div>
 
-<hr>
-
+<div id="tabWords" class="tab-panel">
 <div class="sec-lbl">Mnemonic Derivation (12/24 words)</div>
 <textarea id="mnWords" placeholder="paste 12 or 24 BIP39 words (space/newline separated)"></textarea>
 <div class="mn-row">
@@ -224,14 +269,7 @@
 </div>
 <div id="mnWarn" class="warn">BIP39 validation warning only; derivation always runs.</div>
 <div id="mnOut" class="mn-out"><span style="color:#bbb">—</span></div>
-
-<hr>
-
-<div class="log-hdr">
-    <span class="log-lbl">Log</span>
-    <button class="log-clr" onclick="clearLog()">clear</button>
 </div>
-<div class="log-box" id="logConsole"></div>
 
 <script>
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -250,11 +288,13 @@ function satToBTC(sat) {
 }
 
 async function fetchSqliteByKey(key32, limit = 20) {
+    const t0 = performance.now();
     const resp = await fetch(`balance_lookup.php?key32=${encodeURIComponent(key32)}&limit=${limit}&_cb=${Date.now()}`);
-    return resp.json();
+    const d = await resp.json();
+    return { d, net_ms: (performance.now() - t0).toFixed(0) };
 }
 
-function renderSqliteResult(key32, data, err) {
+function renderSqliteResult(key32, data, err, timing = null) {
     const box = document.getElementById('sqliteBox');
     if (err) {
         box.textContent = `error: ${err}`;
@@ -265,11 +305,12 @@ function renderSqliteResult(key32, data, err) {
         return;
     }
     if (!data.count) {
+        const t = timing ? `\nphp ${timing.php_ms}ms · net ${timing.net_ms}ms` : '';
         box.textContent =
             `key32=${key32}\n` +
             `rows=0\n` +
             `total_sat=0 (0.00000000 BTC)\n` +
-            `note: this sqlite stores CURRENT unspent outputs only (UTXO set).`;
+            `note: this sqlite stores CURRENT unspent outputs only (UTXO set).${t}`;
         return;
     }
     const txids = new Set((data.rows || []).map(r => r.txid_hex)).size;
@@ -277,6 +318,7 @@ function renderSqliteResult(key32, data, err) {
         `key32=${key32}\n` +
         `rows=${data.count} (limit ${data.limit})  distinct_txids=${txids}\n` +
         `total_sat=${data.total_sat} (${satToBTC(data.total_sat)} BTC)\n`;
+    if (timing) out += `php ${timing.php_ms}ms · net ${timing.net_ms}ms\n`;
     for (let i = 0; i < data.rows.length; i++) {
         const r = data.rows[i];
         out += `${i + 1}. ${r.txid_hex}:${r.vout}  ${r.value_sat} sat (${satToBTC(r.value_sat)} BTC)\n`;
@@ -306,7 +348,7 @@ function logServerResults(results, totalMs, netMs, clientFound) {
 
     if (balResults.length) {
         balResults.forEach((r, i) => {
-            const pre   = i === 0 ? 'balance ' : '        ';
+            const pre   = i === 0 ? 'server  ' : '        ';
             const label = filterLabel(r.filter).padEnd(w, ' ');
             if (r.error) {
                 log(`${pre}${label}  error: ${r.error}`, 'err');
@@ -443,7 +485,7 @@ async function refreshIDBState() {
     if (!keys.length) { delRow.style.display = 'none'; return; }
     delRow.style.display = '';
     delList.innerHTML = '';
-    const labels = { 512:'512M', 16384:'16G' };
+    const labels = { 512:'512M' };
     keys.sort((a,b)=>a-b).forEach(mb => {
         const btn = document.createElement('button');
         btn.className = 'del-btn';
@@ -503,6 +545,7 @@ function deactivateFilter() {
 }
 
 async function filterClick(sizeMB, bitsExp) {
+    if (sizeMB !== 512) return;
     // clicking the active button deactivates it
     if (cf.sizeMB === sizeMB) { deactivateFilter(); return; }
 
@@ -621,7 +664,7 @@ async function verifyInput() {
             .then(d => ({ d, net: (performance.now()-serverT0).toFixed(0) }))
             .catch(e => ({ err: e.message }));
         const sqlitePromise = fetchSqliteByKey(filterKey, 20)
-            .then(d => ({ d }))
+            .then(({ d, net_ms }) => ({ d, net_ms }))
             .catch(e => ({ err: e.message }));
 
         if (cr !== null) {
@@ -638,7 +681,11 @@ async function verifyInput() {
                 logServerResults(d.results, d.time_total_ms, net, cr.found);
                 showResult(cr.found, filterKey, detectType, `${cf.sizeMB}mb`, cr.ms, d.time_total_ms, net);
                 const sq = await sqlitePromise;
-                renderSqliteResult(filterKey, sq.d, sq.err);
+                const sqPhpMs = (sq.d && sq.d.time_total_ms !== undefined) ? sq.d.time_total_ms : '?';
+                if (!sq.err && sq.d && sq.d.ok) {
+                    log(`sqlite  · rows ${sq.d.count} · php ${sqPhpMs}ms · net ${sq.net_ms}ms`, sq.d.count ? 'ok' : 'dim');
+                }
+                renderSqliteResult(filterKey, sq.d, sq.err, { php_ms: sqPhpMs, net_ms: sq.net_ms || '?' });
             });
         } else {
             // no client filter — wait for server only
@@ -651,7 +698,11 @@ async function verifyInput() {
             showResult(best.found, filterKey, detectType, best.filter, null, d.time_total_ms, net);
             addHistory(raw, best.found);
             const sq = await sqlitePromise;
-            renderSqliteResult(filterKey, sq.d, sq.err);
+            const sqPhpMs = (sq.d && sq.d.time_total_ms !== undefined) ? sq.d.time_total_ms : '?';
+            if (!sq.err && sq.d && sq.d.ok) {
+                log(`sqlite  · rows ${sq.d.count} · php ${sqPhpMs}ms · net ${sq.net_ms}ms`, sq.d.count ? 'ok' : 'dim');
+            }
+            renderSqliteResult(filterKey, sq.d, sq.err, { php_ms: sqPhpMs, net_ms: sq.net_ms || '?' });
         }
     } catch (err) {
         setResult('err', err.message);
@@ -677,6 +728,40 @@ function setResult(cls, msg) {
     const box = document.getElementById('resultBox');
     box.className = cls;
     box.textContent = msg;
+}
+
+function setTab(which) {
+    const isAddress = which === 'address';
+    document.getElementById('tabAddress').classList.toggle('active', isAddress);
+    document.getElementById('tabWords').classList.toggle('active', !isAddress);
+    document.getElementById('tabBtnAddress').classList.toggle('active', isAddress);
+    document.getElementById('tabBtnWords').classList.toggle('active', !isAddress);
+}
+
+function downloadArtifact(path) {
+    const a = document.createElement('a');
+    a.href = path;
+    a.download = '';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    log(`download started: ${path}`, 'dim');
+}
+
+function downloadAllArtifacts() {
+    const files = [
+        'filter/16384mb.bin',
+        'filter/512mb.bin',
+        'filter/16384mb_bal.bin',
+        'filter/512mb_bal.bin',
+        'filter/balance_utxo.sqlite',
+    ];
+    let delay = 0;
+    files.forEach((f) => {
+        setTimeout(() => downloadArtifact(f), delay);
+        delay += 250;
+    });
 }
 
 // ── MNEMONIC DERIVATION + FULL CHECK ──────────────────────────────────────────
@@ -928,7 +1013,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     // restore last active filter from localStorage
     const lastMB = parseInt(localStorage.getItem('btc_active_filter') || '0');
-    if (lastMB) {
+    if (lastMB === 512) {
         const cached = await idbLoad(lastMB);
         if (cached) {
             activateFilter(cached.sizeMB, cached.bitsExp, cached.buffer);
@@ -937,6 +1022,7 @@ window.addEventListener('DOMContentLoaded', async () => {
             log('ready', 'dim');
         }
     } else {
+        if (lastMB && lastMB !== 512) localStorage.removeItem('btc_active_filter');
         log('ready', 'dim');
     }
 
