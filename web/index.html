@@ -48,8 +48,21 @@
             display: flex;
             flex-direction: column;
             gap: 1px;
+            cursor: pointer;
         }
+        .slot.locked { background: #fff6f6; }
+        .slot-top { display: flex; align-items: center; justify-content: space-between; line-height: 1; }
         .slot-idx { font-size: 10px; color: #bbb; line-height: 1; }
+        .slot-lock {
+            border: none;
+            background: transparent;
+            color: #bbb;
+            font-size: 10px;
+            font-family: monospace;
+            padding: 0;
+            user-select: none;
+        }
+        .slot-lock.locked { color: #c33; font-weight: 700; }
         .slot-word { color: #111; word-break: break-all; }
 
         @keyframes wordFlash {
@@ -85,6 +98,28 @@
         }
         #btnCopy:hover { background: #f0f0f0; }
         #btnCopy.copied { border-color: #2a9a2a; color: #1a7a1a; }
+
+        .scan-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #444;
+        }
+        .scan-paths { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .scan-paths label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+        .scan-idx { display: inline-flex; align-items: center; gap: 4px; }
+        .scan-idx input {
+            width: 56px;
+            padding: 2px 4px;
+            border: 1px solid #ccc;
+            background: #fff;
+            font-family: monospace;
+            font-size: 11px;
+        }
 
         #statusLine {
             font-family: monospace;
@@ -167,6 +202,20 @@
         #autoStatsRow { font-family: monospace; font-size: 11px; color: #666; margin-bottom: 6px; display: none; }
         #autoStats .stat-sep { color: #ccc; margin: 0 4px; }
         #autoStats .stat-match { color: #1a7a1a; }
+        #eduStatsBox {
+            border: 1px solid #ddd;
+            background: #fafafa;
+            padding: 6px 8px;
+            margin-bottom: 8px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #444;
+        }
+        #eduStatsTop { margin-bottom: 4px; line-height: 1.55; }
+        #eduProgressWrap { margin-top: 4px; }
+        #eduProgressBar { height: 8px; background: #eee; border: 1px solid #ddd; border-radius: 3px; overflow: hidden; }
+        #eduProgressFill { height: 100%; width: 0%; background: #2f8f4e; transition: width .2s linear; }
+        #eduProgressText { margin-top: 3px; color: #666; }
 
         /* no-filter warning */
         #noFilterBanner {
@@ -194,6 +243,8 @@
             cursor: pointer;
         }
         .hits-entry:hover { background: #eaffea; border-color: #5cb85c; }
+        .hits-entry.warn { border-color: #e3cf95; background: #fff9e8; }
+        .hits-entry.warn:hover { background: #fff4d9; border-color: #c9ad66; }
         .hits-entry-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3px; }
         .hits-entry-ts { font-size: 10px; color: #bbb; }
         .hits-entry-words { color: #555; word-break: break-word; margin-bottom: 4px; }
@@ -222,6 +273,23 @@
     <button id="btnCopy" onclick="copyWords()">copy</button>
     <span id="statusLine">No filter loaded — load one below or spin to auto-download the 512M filter.</span>
 </div>
+<div class="scan-row">
+    <span>Paths:</span>
+    <div class="scan-paths">
+        <label><input type="checkbox" id="path44" checked>44</label>
+        <label><input type="checkbox" id="path49" checked>49</label>
+        <label><input type="checkbox" id="path84" checked>84</label>
+        <label><input type="checkbox" id="path86" checked>86</label>
+    </div>
+    <span class="scan-idx">Per path: <input type="number" id="pathCount" min="1" max="2000" step="1" value="20"></span>
+</div>
+<div id="eduStatsBox">
+    <div id="eduStatsTop">Waiting for first spin…</div>
+    <div id="eduProgressWrap">
+        <div id="eduProgressBar"><div id="eduProgressFill"></div></div>
+        <div id="eduProgressText">Progress: 0%</div>
+    </div>
+</div>
 <div id="autoStatsRow"><span id="autoStats"></span></div>
 
 <div id="noFilterBanner">No filter loaded. Spinning will auto-download the 512M filter (~512 MB). Server confirmations always use 16G.</div>
@@ -229,7 +297,7 @@
 
 <hr>
 
-<div class="filter-row">
+<div class="filter-row" id="filterRow">
     <span class="filter-lbl">Local Filter:</span>
     <button class="cf-btn" data-mb="512"   data-bits="32" onclick="filterClick(512,32)">512M</button>
 </div>
@@ -249,7 +317,7 @@
 
 <hr>
 
-<div class="log-hdr">
+<div class="log-hdr" id="logHdr">
     <span class="log-lbl">Log</span>
     <button class="log-clr" onclick="clearLog()">clear</button>
 </div>
@@ -267,6 +335,7 @@
 
 <script>
 'use strict';
+const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
 
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -283,6 +352,7 @@ function hexToBytes(h) { return new Uint8Array(h.match(/.{2}/g).map(x=>parseInt(
 // ── LOG ───────────────────────────────────────────────────────────────────────
 const LOG_START = performance.now();
 function log(msg, type) {
+    if (!DEBUG_MODE) return;
     type = type || '';
     const t = ((performance.now()-LOG_START)/1000).toFixed(2);
     const el = document.getElementById('logConsole');
@@ -413,7 +483,7 @@ async function refreshIDBState() {
     });
     const delRow  = document.getElementById('idbRow');
     const delList = document.getElementById('idbDelList');
-    if (!keys.length) { delRow.style.display = 'none'; return; }
+    if (!keys.length || !DEBUG_MODE) { delRow.style.display = 'none'; return; }
     delRow.style.display = '';
     delList.innerHTML = '';
     const labels = { 512:'512M' };
@@ -431,6 +501,25 @@ async function refreshIDBState() {
         };
         delList.appendChild(btn);
     });
+}
+
+function updateDebugUiVisibility() {
+    const logHdr = document.getElementById('logHdr');
+    const logBox = document.getElementById('logConsole');
+    const filterRow = document.getElementById('filterRow');
+    const idbRow = document.getElementById('idbRow');
+
+    if (!DEBUG_MODE) {
+        if (logHdr) logHdr.style.display = 'none';
+        if (logBox) logBox.style.display = 'none';
+        if (filterRow) filterRow.style.display = cf.view ? 'none' : '';
+        if (idbRow && cf.view) idbRow.style.display = 'none';
+        return;
+    }
+
+    if (logHdr) logHdr.style.display = '';
+    if (logBox) logBox.style.display = '';
+    if (filterRow) filterRow.style.display = '';
 }
 
 // ── CLIENT FILTER ─────────────────────────────────────────────────────────────
@@ -465,6 +554,7 @@ function activateFilter(sizeMB, bitsExp, buffer) {
     if (activeBtn) activeBtn.classList.add('loaded');
     localStorage.setItem('btc_active_filter', sizeMB);
     document.getElementById('noFilterBanner').style.display = 'none';
+    updateDebugUiVisibility();
 }
 
 function deactivateFilter() {
@@ -474,6 +564,7 @@ function deactivateFilter() {
     localStorage.removeItem('btc_active_filter');
     document.getElementById('noFilterBanner').style.display = '';
     if (mb) log(mb + 'MB deactivated', 'dim');
+    updateDebugUiVisibility();
 }
 
 async function filterClick(sizeMB, bitsExp) {
@@ -702,6 +793,32 @@ function urlParamToWords(param) {
 
 // ── COPY WORDS ────────────────────────────────────────────────────────────────
 let currentWords = null;
+const slotLocks = Array(12).fill(false);
+const stateSpinCounts = Object.create(null);
+const LOCK_STATE_KEY = 'btc_slot_lock_state_v1';
+
+function saveLockState() {
+    try {
+        localStorage.setItem(LOCK_STATE_KEY, JSON.stringify({
+            locks: slotLocks.slice(),
+            words: currentWords ? currentWords.slice() : null
+        }));
+    } catch (_) {}
+}
+
+function loadLockState() {
+    try {
+        const raw = localStorage.getItem(LOCK_STATE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed.locks) && parsed.locks.length === 12) {
+            for (let i = 0; i < 12; i++) slotLocks[i] = parsed.locks[i] === true;
+        }
+        if (Array.isArray(parsed.words) && parsed.words.length === 12) {
+            currentWords = parsed.words.map(function(w) { return String(w || ''); });
+        }
+    } catch (_) {}
+}
 
 function copyWords() {
     if (!currentWords) return;
@@ -719,16 +836,34 @@ function copyWords() {
 const HITS_KEY = 'btc_hits_history';
 const MAX_HITS = 50;
 
-function saveHitToHistory(words, found) {
+async function saveHitToHistory(words, found) {
+    const balCandidates = (found || []).filter(function(f) { return f && f.balFound === true; });
+    if (balCandidates.length === 0) return false;
+    const enriched = await enrichHistoryCandidatesWithSqlite(balCandidates);
+    const hasUtxo = enriched.some(function(f) { return f.sqliteHasUtxo === true; });
+    if (!hasUtxo) return false;
     const hist = JSON.parse(localStorage.getItem(HITS_KEY) || '[]');
     hist.unshift({
         ts: Date.now(),
         words: words,
-        found: found.map(function(f) { return { type: f.type, addr: f.addr, filterKey: f.filterKey, serverFound: f.serverFound, balFound: f.balFound }; })
+        hasUtxo: hasUtxo,
+        found: enriched.map(function(f) {
+            return {
+                type: f.type,
+                addr: f.addr,
+                filterKey: f.filterKey,
+                serverFound: f.serverFound,
+                balFound: f.balFound,
+                sqliteCount: f.sqliteCount || 0,
+                sqliteTotalSat: f.sqliteTotalSat || 0,
+                sqliteHasUtxo: f.sqliteHasUtxo === true
+            };
+        })
     });
     if (hist.length > MAX_HITS) hist.splice(MAX_HITS);
     localStorage.setItem(HITS_KEY, JSON.stringify(hist));
     renderHitsHistory();
+    return hasUtxo;
 }
 
 function clearHits() {
@@ -750,9 +885,14 @@ function renderHitsHistory() {
     if (!hist.length) { section.style.display = 'none'; return; }
     section.style.display = '';
     list.innerHTML = '';
+    const btc = function(sat) { return (sat / 1e8).toFixed(8) + '\xa0BTC'; };
     hist.forEach(function(entry, idx) {
         const div = document.createElement('div');
-        div.className = 'hits-entry';
+        const hasKnownUtxoFlag = (entry.found || []).some(function(f) { return typeof f.sqliteHasUtxo === 'boolean'; });
+        const hasUtxo = hasKnownUtxoFlag
+            ? (entry.found || []).some(function(f) { return f.sqliteHasUtxo === true; })
+            : (entry.hasUtxo === true);
+        div.className = 'hits-entry' + (hasKnownUtxoFlag && !hasUtxo ? ' warn' : '');
         div.style.cursor = 'pointer';
         const ts = new Date(entry.ts).toLocaleString();
         let addrHtml = '';
@@ -763,16 +903,19 @@ function renderHitsHistory() {
                       ? (f.balFound === true ? ' <span style="color:#1a7a1a">\u2713btc</span>'
                       : f.balFound === false  ? ' <span style="color:#888">nobal</span>' : '') : '';
             const key32 = normalizeKey32Hex(f.filterKey || '');
+            const sqliteTxt = (f.sqliteHasUtxo === true)
+                ? ('utxo\xa0' + Number(f.sqliteCount || 0) + '\xa0·\xa0bal\xa0' + btc(Number(f.sqliteTotalSat || 0)))
+                : (typeof f.sqliteHasUtxo === 'boolean' ? 'no utxo' : '');
+            const sqliteColor = f.sqliteHasUtxo === true ? '#1a7a1a' : '#b8860b';
             addrHtml += '<div class="hits-entry-addr" data-key32="' + esc(key32) + '" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">'
                 + '<span>' + esc(f.type) + ' ' + esc(f.addr) + srv + bal + '</span>'
-                + '<span class="res-bal" style="font-size:11px;font-family:monospace;white-space:nowrap;flex:1;color:#888"></span>'
+                + '<span class="res-bal" style="font-size:11px;font-family:monospace;white-space:nowrap;flex:1;color:' + sqliteColor + '">' + esc(sqliteTxt) + '</span>'
                 + '<a href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank" onclick="event.stopPropagation()" class="res-link">mempool&#8599;</a>'
                 + '</div>';
         });
         div.innerHTML = '<div class="hits-entry-top">'
             + '<span class="hits-entry-words">' + esc(entry.words.join(' ')) + '</span>'
             + '<span style="display:flex;align-items:baseline;gap:6px;margin-left:auto">'
-            + '<button class="hits-clr" onclick="event.stopPropagation();checkBalancesIn(this,this.closest(\'.hits-entry\'))">bal</button>'
             + '<span class="hits-entry-ts">' + esc(ts) + '</span>'
             + '</span>'
             + '</div>'
@@ -790,7 +933,8 @@ function buildGrid() {
         const slot = document.createElement('div');
         slot.className = 'slot';
         slot.id = 'slot' + i;
-        slot.innerHTML = '<span class="slot-idx">' + (i+1) + '</span><span class="slot-word">\u2014</span>';
+        slot.onclick = function(ev) { toggleWordLock(i, ev); };
+        slot.innerHTML = '<div class="slot-top"><span class="slot-idx">' + (i+1) + '</span><span class="slot-lock" id="slotLock' + i + '"></span></div><span class="slot-word">\u2014</span>';
         grid.appendChild(slot);
     }
 }
@@ -801,6 +945,37 @@ function setSlotWord(idx, word) {
     void slot.offsetWidth; // reflow to restart animation
     slot.classList.add('flash');
     slot.querySelector('.slot-word').textContent = word;
+}
+
+function renderCurrentWordsToSlots() {
+    if (!currentWords || currentWords.length !== 12) return;
+    for (let i = 0; i < 12; i++) {
+        const slot = document.getElementById('slot' + i);
+        if (!slot) continue;
+        slot.querySelector('.slot-word').textContent = currentWords[i] || '\u2014';
+    }
+}
+
+function renderSlotLockState(idx) {
+    const slot = document.getElementById('slot' + idx);
+    const btn = document.getElementById('slotLock' + idx);
+    if (!slot || !btn) return;
+    const locked = slotLocks[idx] === true;
+    slot.classList.toggle('locked', locked);
+    btn.classList.toggle('locked', locked);
+    btn.textContent = locked ? 'locked' : '';
+}
+
+function renderAllSlotLocks() {
+    for (let i = 0; i < 12; i++) renderSlotLockState(i);
+}
+
+function toggleWordLock(idx, ev) {
+    if (ev) ev.stopPropagation();
+    slotLocks[idx] = !slotLocks[idx];
+    renderSlotLockState(idx);
+    saveLockState();
+    updateAutoStats();
 }
 
 // ── AUTOSPIN ──────────────────────────────────────────────────────────────────
@@ -831,7 +1006,6 @@ async function flushPendingHits() {
     }
     const lookups = uniqueKeys.map(serverPos); // [[row,col], ...]
 
-    log('batch: checking ' + uniqueKeys.length + ' addr from ' + batch.length + ' local hits\u2026', 'dim');
     try {
         const t0   = performance.now();
         const resp = await fetch('index.php', { method: 'POST', body: packLookups(lookups) });
@@ -861,15 +1035,15 @@ async function flushPendingHits() {
             await checkBalanceFilter(allConfirmed);
             const balHits = allConfirmed.filter(function(f) { return f.balFound; }).length;
             if (balHits) log('balance filter: ' + balHits + ' confirmed address(es) have unspent BTC', 'ok');
+            let savedFunded = 0;
             for (let i = 0; i < groups.length; i++) {
-                log('  ' + groups[i].words.join(' '), 'ok');
-                saveHitToHistory(groups[i].words, groups[i].found);
+                const savedHasUtxo = await saveHitToHistory(groups[i].words, groups[i].found);
+                if (savedHasUtxo) savedFunded++;
                 spinsAtLastMatch = totalSpins;
                 lastMatchTime = Date.now();
                 updateAutoStats();
             }
-        } else {
-            log('batch: ' + uniqueKeys.length + ' checked \xb7 ' + ms + 'ms \xb7 no hits', 'dim');
+            if (savedFunded > 0) log('saved ' + savedFunded + ' funded mnemonic(s) to Recent Hits', 'ok');
         }
     } catch(e) {
         log('batch server error: ' + e.message, 'err');
@@ -882,6 +1056,29 @@ function normalizeKey32Hex(filterKey) {
     if (hex.length === 64) return hex;
     if (hex.length === 40) return hex + '000000000000000000000000';
     return '';
+}
+
+async function enrichHistoryCandidatesWithSqlite(items) {
+    const tasks = items.map(async function(item, idx) {
+        const key32 = normalizeKey32Hex(item.filterKey || '');
+        const out = Object.assign({}, item, { sqliteCount: 0, sqliteTotalSat: 0, sqliteHasUtxo: false });
+        if (!key32) return out;
+        try {
+            const resp = await fetch('balance_lookup.php?key32=' + key32 + '&limit=1&_cb=' + Date.now() + '_' + idx);
+            if (!resp.ok) return out;
+            const data = await resp.json();
+            if (!data || data.ok !== true) return out;
+            const c = Number(data.count || 0);
+            const sat = Number(data.total_sat || 0);
+            out.sqliteCount = c;
+            out.sqliteTotalSat = sat;
+            out.sqliteHasUtxo = c > 0;
+            return out;
+        } catch (_) {
+            return out;
+        }
+    });
+    return await Promise.all(tasks);
 }
 
 async function checkBalancesIn(btn, container) {
@@ -925,10 +1122,80 @@ async function checkBalancesIn(btn, container) {
     btn.disabled = false;
 }
 
+function powBigInt(base, exp) {
+    let r = 1n;
+    const b = BigInt(base);
+    for (let i = 0; i < exp; i++) r *= b;
+    return r;
+}
+
+function formatBigIntShort(n) {
+    const s = n.toString();
+    if (s.length <= 6) return s;
+    const mant = s.slice(0, 3);
+    const frac = s.slice(3, 5);
+    return mant[0] + '.' + mant[1] + mant[2] + frac + 'e' + (s.length - 1);
+}
+
+function formatDuration(sec) {
+    if (!isFinite(sec) || sec < 0) return 'n/a';
+    if (sec < 1) return '<1s';
+    if (sec < 60) return Math.round(sec) + 's';
+    if (sec < 3600) return Math.round(sec / 60) + 'm';
+    if (sec < 86400) return Math.round(sec / 3600) + 'h';
+    if (sec < 31536000) return Math.round(sec / 86400) + 'd';
+    return Math.round(sec / 31536000) + 'y';
+}
+
+function getLockStateKey() {
+    const parts = [];
+    for (let i = 0; i < 12; i++) {
+        if (!slotLocks[i]) continue;
+        const w = currentWords && currentWords[i] ? currentWords[i] : '';
+        parts.push(i + ':' + w);
+    }
+    return parts.join('|');
+}
+
+function registerSpinForCurrentState() {
+    const k = getLockStateKey();
+    stateSpinCounts[k] = (stateSpinCounts[k] || 0n) + 1n;
+    totalSpins++;
+}
+
+function buildSpinWords(fixedWords) {
+    if (fixedWords) return { words: fixedWords.slice(), exhaustive: false };
+
+    const freeSlots = [];
+    for (let i = 0; i < 12; i++) if (!slotLocks[i]) freeSlots.push(i);
+
+    // Auto-enable deterministic exhaustive stepping when fewer than 6 words are spinning.
+    const exhaustive = freeSlots.length < 6;
+    const stateKey = getLockStateKey();
+    const spinIndex = stateSpinCounts[stateKey] || 0n;
+    const baseWords = currentWords ? currentWords.slice() : generateMnemonic();
+    const words = baseWords.slice();
+
+    if (exhaustive) {
+        const totalComb = powBigInt(2048, freeSlots.length);
+        let rem = totalComb > 0n ? (spinIndex % totalComb) : 0n;
+        for (let i = freeSlots.length - 1; i >= 0; i--) {
+            const digit = Number(rem % 2048n);
+            rem /= 2048n;
+            words[freeSlots[i]] = BIP39_WORDLIST[digit];
+        }
+    } else {
+        const rnd = generateMnemonic();
+        for (let i = 0; i < freeSlots.length; i++) words[freeSlots[i]] = rnd[freeSlots[i]];
+    }
+    return { words, exhaustive };
+}
+
 function updateAutoStats() {
     const now     = Date.now();
     const elapsed = (now - pageStartTime) / 1000;
     const spsAll  = elapsed > 0 ? (totalSpins / elapsed).toFixed(2) : '0.00';
+    const speed = elapsed > 0 ? (totalSpins / elapsed) : 0;
 
     const apsAll = elapsed > 0 ? (totalAddresses / elapsed).toFixed(1) : '0.0';
     let html = totalSpins.toLocaleString() + ' spins'
@@ -949,6 +1216,35 @@ function updateAutoStats() {
 
     document.getElementById('autoStats').innerHTML = html;
     document.getElementById('autoStatsRow').style.display = 'block';
+
+    const locked = slotLocks.filter(Boolean).length;
+    const free = 12 - locked;
+    const totalComb = powBigInt(2048, free);
+    const stateKey = getLockStateKey();
+    const checkedInState = stateSpinCounts[stateKey] || 0n;
+    const remaining = checkedInState < totalComb ? (totalComb - checkedInState) : 0n;
+    const eta = speed > 0
+        ? (remaining > 1000000000000000000n ? 'very long' : formatDuration(Number(remaining) / speed))
+        : 'n/a';
+
+    const progressBp = totalComb > 0n ? Number((checkedInState * 10000n) / totalComb) : 0;
+    const progressPct = progressBp >= 10000 ? '100.00%' : (checkedInState > 0n && progressBp === 0 ? '<0.01%' : (progressBp / 100).toFixed(2) + '%');
+    const widthPct = Math.max(0, Math.min(progressBp / 100, 100));
+    const fill = document.getElementById('eduProgressFill');
+
+    document.getElementById('eduStatsTop').innerHTML =
+        'Locked: ' + locked + ' / 12'
+        + ' <span class="stat-sep">·</span> Mode: ' + (free < 6 ? 'exhaustive' : 'random')
+        + ' <span class="stat-sep">·</span> Speed: ' + spsAll + '/s'
+        + ' <span class="stat-sep">·</span> Space: ' + formatBigIntShort(totalComb)
+        + ' <span class="stat-sep">·</span> Tried: ' + formatBigIntShort(checkedInState)
+        + ' <span class="stat-sep">·</span> ETA: ' + eta;
+    if (fill) {
+        fill.style.width = widthPct + '%';
+        if (widthPct > 0 && widthPct < 1) fill.style.minWidth = '2px';
+        else fill.style.minWidth = '0';
+    }
+    document.getElementById('eduProgressText').textContent = 'Attempt progress: ' + progressPct + ' (' + free + ' free slots)';
 }
 
 function setAutoSpin(val) {
@@ -976,6 +1272,24 @@ async function onAutoChange() {
     document.getElementById('btnCopy').style.display = '';
 }
 
+function getScanConfig() {
+    const raw = parseInt((document.getElementById('pathCount') || {}).value || '20', 10);
+    const perPathCount = Math.max(1, Math.min(2000, isFinite(raw) ? raw : 20));
+
+    const allPathDefs = [
+        { id: 'path44', path: "m/44'/0'/0'/0", type: 'P2PKH',       fn: addrP2PKH },
+        { id: 'path49', path: "m/49'/0'/0'/0", type: 'P2SH-P2WPKH', fn: addrP2SHP2WPKH },
+        { id: 'path84', path: "m/84'/0'/0'/0", type: 'P2WPKH',      fn: addrP2WPKH },
+        { id: 'path86', path: "m/86'/0'/0'/0", type: 'P2TR',        fn: addrP2TR },
+    ];
+
+    const enabled = allPathDefs.filter(function(p) {
+        const el = document.getElementById(p.id);
+        return !!(el && el.checked);
+    });
+    return { perPathCount, enabledPaths: enabled };
+}
+
 // ── SPIN ──────────────────────────────────────────────────────────────────────
 async function doSpin(fixedWords, opts) {
     try { return await _doSpin(fixedWords, opts); }
@@ -991,8 +1305,10 @@ async function _doSpin(fixedWords, opts) {
     document.getElementById('btnCopy').style.display = 'none';
 
     // 1. Generate (or restore) mnemonic
-    const words = fixedWords || generateMnemonic();
-    currentWords = words;
+    const spinPlan = buildSpinWords(fixedWords);
+    const words = spinPlan.words;
+    currentWords = words.slice();
+    saveLockState();
 
     // 2. Update URL (skip during autospin — replaceState triggers favicon re-fetch every spin)
     if (!isAuto) history.replaceState(null, '', '?m=' + wordsToUrlParam(words));
@@ -1001,20 +1317,24 @@ async function _doSpin(fixedWords, opts) {
     for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
 
     document.getElementById('statusLine').textContent = words.join(' ');
-    if (!isAuto) log('mnemonic: ' + words.join(' '), 'hi');
+    if (!isAuto) log((spinPlan.exhaustive ? '[exhaustive] ' : '') + 'mnemonic: ' + words.join(' '), 'hi');
 
     // 4. Derive seed (PBKDF2-HMAC-SHA512, 2048 iterations)
     const t0 = performance.now();
     const seed = await mnemonicToSeed(words);
     if (!isAuto) log('seed derived in ' + ((performance.now()-t0)/1000).toFixed(2) + 's', 'dim');
 
-    // 5. Derive addresses for 3 paths x 20 indices = 60 total
-    const pathDefs = [
-        { path: "m/44'/0'/0'/0", type: 'P2PKH',       fn: addrP2PKH },
-        { path: "m/49'/0'/0'/0", type: 'P2SH-P2WPKH', fn: addrP2SHP2WPKH },
-        { path: "m/84'/0'/0'/0", type: 'P2WPKH',      fn: addrP2WPKH },
-        { path: "m/86'/0'/0'/0", type: 'P2TR',         fn: addrP2TR },
-    ];
+    // 5. Derive addresses for selected paths and count
+    const scanCfg = getScanConfig();
+    const pathDefs = scanCfg.enabledPaths;
+    const perPathCount = scanCfg.perPathCount;
+    if (pathDefs.length === 0) {
+        document.getElementById('statusLine').textContent = 'Select at least one derivation path.';
+        if (!isAuto) log('no derivation path selected', 'err');
+        if (isAuto) setAutoSpin(false);
+        btn.disabled = false;
+        return false;
+    }
 
     const found = [];
     let checked = 0, serverFilterLabel = null;
@@ -1022,12 +1342,12 @@ async function _doSpin(fixedWords, opts) {
 
 
     if (serverOnly) {
-        // Skip local filter — derive all 60, check all against server directly
+        // Skip local filter — derive all selected addresses, check all against server directly
         if (!isAuto) log('server-only check (no local filter required)\u2026', 'dim');
         for (let pi = 0; pi < pathDefs.length; pi++) {
             const {path, type, fn} = pathDefs[pi];
             const acct = await derivePath(seed, path);
-            for (let n = 0; n < 20; n++) {
+            for (let n = 0; n < perPathCount; n++) {
                 const child = await childKey(acct, n, false);
                 const {addr, h160, filterKey} = fn(child.key);
                 checked++;
@@ -1049,12 +1369,13 @@ async function _doSpin(fixedWords, opts) {
             }
             // keep only server hits in found for display
             found.splice(0, found.length, ...hits);
-            if (hits.length > 0) saveHitToHistory(words, hits);
+            if (hits.length > 0) await saveHitToHistory(words, hits);
         } catch(e) { log('server error: ' + e.message, 'err'); }
     } else if (cf.view) {
-        // Phase 1: check first 5 (P2PKH indices 0..4) — bail early if no hit
+        // Phase 1: check first few entries of first selected path — bail early if no hit
         const acct0 = await derivePath(seed, pathDefs[0].path);
-        for (let n = 0; n < 5; n++) {
+        const phase1Count = Math.min(5, perPathCount);
+        for (let n = 0; n < phase1Count; n++) {
             const child = await childKey(acct0, n, false);
             const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
             checked++;
@@ -1068,7 +1389,7 @@ async function _doSpin(fixedWords, opts) {
         if (found.length === 0) {
             if (!isAuto) log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 no match', 'data');
             btn.disabled = false;
-            totalSpins++;
+            registerSpinForCurrentState();
             totalAddresses += checked;
             updateAutoStats();
             return false;
@@ -1085,15 +1406,15 @@ async function _doSpin(fixedWords, opts) {
                 log('quick server check \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', 'dim');
             } catch(e) { log('server error: ' + e.message, 'err'); }
             if (!found.some(function(f) { return f.serverFound === true; })) {
-                log('false positive \xb7 skipping remaining 55', 'dim');
+                log('false positive \xb7 skipping remaining selected addresses', 'dim');
                 btn.disabled = false;
-                totalSpins++;
+                registerSpinForCurrentState();
                 totalAddresses += checked;
                 updateAutoStats();
                 // fall through to show resultsBox with the unconfirmed hit
             } else {
-                // Phase 2: check remaining 55 (P2PKH 5..19 + P2SH + P2WPKH)
-                for (let n = 5; n < 20; n++) {
+                // Phase 2: check remainder of selected paths
+                for (let n = phase1Count; n < perPathCount; n++) {
                     const child = await childKey(acct0, n, false);
                     const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
                     checked++;
@@ -1106,7 +1427,7 @@ async function _doSpin(fixedWords, opts) {
                 for (let pi = 1; pi < pathDefs.length; pi++) {
                     const {path, type, fn} = pathDefs[pi];
                     const acct = await derivePath(seed, path);
-                    for (let n = 0; n < 20; n++) {
+                    for (let n = 0; n < perPathCount; n++) {
                         const child = await childKey(acct, n, false);
                         const {addr, h160, filterKey} = fn(child.key);
                         checked++;
@@ -1135,12 +1456,12 @@ async function _doSpin(fixedWords, opts) {
                     await checkBalanceFilter(confirmed);
                     const balHits = confirmed.filter(function(f) { return f.balFound; }).length;
                     log('balance filter: ' + balHits + '/' + confirmed.length + ' have unspent BTC', balHits ? 'ok' : 'data');
-                    saveHitToHistory(words, confirmed);
+                    await saveHitToHistory(words, confirmed);
                 }
             }
         } else {
-            // Autospin: phase 1 local hit → check remaining 55, push all to pendingHits
-            for (let n = 5; n < 20; n++) {
+            // Autospin: phase 1 local hit → check remainder, push all to pendingHits
+            for (let n = phase1Count; n < perPathCount; n++) {
                 const child = await childKey(acct0, n, false);
                 const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
                 checked++;
@@ -1150,7 +1471,7 @@ async function _doSpin(fixedWords, opts) {
             for (let pi = 1; pi < pathDefs.length; pi++) {
                 const {path, type, fn} = pathDefs[pi];
                 const acct = await derivePath(seed, path);
-                for (let n = 0; n < 20; n++) {
+                for (let n = 0; n < perPathCount; n++) {
                     const child = await childKey(acct, n, false);
                     const {addr, h160, filterKey} = fn(child.key);
                     checked++;
@@ -1224,7 +1545,6 @@ async function _doSpin(fixedWords, opts) {
 
     let html = '<div class="res-summary" style="display:flex;align-items:baseline">'
         + '<span>' + summary + '</span>'
-        + (confirmed.length > 0 ? '<button class="hits-clr" style="margin-left:auto" onclick="checkBalancesIn(this,document.getElementById(\'resultsBox\'))">bal</button>' : '')
         + '</div>';
     for (let i = 0; i < confirmed.length; i++) html += resItemHtml(confirmed[i]);
 
@@ -1246,7 +1566,7 @@ async function _doSpin(fixedWords, opts) {
 
     if (!isAuto) document.getElementById('btnCopy').style.display = '';
     btn.disabled = false;
-    totalSpins++;
+    registerSpinForCurrentState();
     totalAddresses += checked;
     updateAutoStats();
     return anyConfirmed;
@@ -1255,6 +1575,10 @@ async function _doSpin(fixedWords, opts) {
 // ── INIT ──────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async function() {
     buildGrid();
+    loadLockState();
+    renderCurrentWordsToSlots();
+    renderAllSlotLocks();
+    updateDebugUiVisibility();
     await refreshIDBState();
     renderHitsHistory();
 
@@ -1282,6 +1606,8 @@ window.addEventListener('DOMContentLoaded', async function() {
             log('could not decode URL mnemonic', 'err');
         }
     }
+    updateDebugUiVisibility();
+    updateAutoStats();
 });
 </script>
 </body>
