@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BTC Private Key Search (educational)</title>
+    <script src="assets/crypto-js.min.js"></script>
+    <script src="assets/elliptic.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 14px;
+            background: #fff;
+            color: #111;
+            padding: 12px;
+            max-width: 640px;
+            margin: 0 auto;
+        }
+        .hdr {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        .hdr-left { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+        .hdr h1 { font-size: 16px; font-weight: 700; }
+        .hdr a { font-size: 12px; color: #666; text-decoration: none; }
+        .hdr a:hover { text-decoration: underline; }
+        .hdr-btn {
+            padding: 4px 10px;
+            border: 1px solid #ccc;
+            background: #fafafa;
+            cursor: pointer;
+            font-size: 11px;
+            font-family: monospace;
+            color: #444;
+        }
+        .hdr-btn.on { border-color: #6a8fc4; background: #eef4ff; font-weight: 600; }
+
+        .warn-box {
+            font-size: 12px;
+            border: 1px solid #c99;
+            background: #fff5f5;
+            color: #722;
+            padding: 8px 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            line-height: 1.45;
+        }
+
+        .filter-status-top {
+            display: none;
+            margin-bottom: 10px;
+            border: 1px solid #6a8fc4;
+            background: #eef4ff;
+            padding: 8px 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #1a3050;
+        }
+        .filter-status-msg { display: block; font-weight: 600; line-height: 1.35; margin-bottom: 0; }
+        .filter-status-top.has-prog .filter-status-msg { margin-bottom: 6px; }
+        .filter-indeterminate {
+            display: none;
+            height: 6px;
+            background: #dde8f8;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 6px;
+        }
+        .filter-indeterminate-bar {
+            height: 100%;
+            width: 35%;
+            background: linear-gradient(90deg, #5a7fc0, #8fa8d4);
+            animation: filter-indet-slide 1.1s ease-in-out infinite;
+        }
+        @keyframes filter-indet-slide {
+            0% { transform: translateX(-120%); }
+            100% { transform: translateX(380%); }
+        }
+        .prog-wrap { margin-bottom: 0; margin-top: 6px; }
+        .prog-bar { height: 6px; background: #dde8f8; border: 1px solid #b8c8e8; border-radius: 2px; margin-bottom: 4px; overflow: hidden; }
+        .prog-fill { height: 100%; background: #3d6ab0; width: 0%; transition: width .2s linear; }
+        .prog-txt { font-size: 11px; color: #345; font-family: monospace; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .prog-cancel { background: none; border: none; font-size: 11px; color: #c33; cursor: pointer; padding: 0; }
+
+        #noFilterBanner {
+            font-size: 12px;
+            font-family: monospace;
+            border: 1px solid #b8860b;
+            background: #fffbe6;
+            color: #7a5800;
+            padding: 6px 8px;
+            margin-bottom: 8px;
+        }
+
+        .range-block {
+            border: 1px solid #ddd;
+            background: #fafafa;
+            padding: 8px 10px;
+            margin-bottom: 10px;
+            font-size: 12px;
+        }
+        .range-block label { display: block; margin-bottom: 6px; color: #444; }
+        .range-block input[type="text"], .range-block input[type="number"] {
+            font-family: monospace;
+            font-size: 11px;
+            padding: 4px 6px;
+            width: 100%;
+            max-width: 100%;
+            border: 1px solid #ccc;
+        }
+        .range-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 8px; }
+        .range-row > div { flex: 1; min-width: 140px; }
+
+        .scan-row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+        .scan-row .path-type { font-weight: 600; color: #333; }
+        .scan-paths label { margin-right: 8px; white-space: nowrap; }
+
+        .scan-space-box {
+            font-size: 12px;
+            border: 1px solid #e0e0e0;
+            background: #fafcff;
+            padding: 8px 10px;
+            margin-bottom: 10px;
+            line-height: 1.45;
+            color: #333;
+        }
+        .scan-space-box .sse-line { margin: 0 0 6px 0; color: #333; }
+        .scan-space-box .sse-num { font-family: monospace; font-size: 11px; word-break: break-all; color: #111; }
+        .scan-space-box .sse-sub { font-size: 11px; color: #555; margin: 0 0 4px 0; }
+        .scan-space-box .sse-rate { font-size: 11px; color: #444; margin: 0 0 4px 0; font-family: monospace; }
+
+        #eduStatsBox {
+            border: 1px solid #ddd;
+            background: #fafafa;
+            padding: 6px 8px;
+            margin-bottom: 8px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #444;
+        }
+        #eduStatsAuto { margin-bottom: 4px; color: #666; line-height: 1.45; }
+        #eduProgressWrap { margin-top: 4px; }
+        #eduProgressBar { height: 8px; background: #eee; border: 1px solid #ddd; border-radius: 3px; overflow: hidden; }
+        #eduProgressFill { height: 100%; width: 0%; background: #2f4f8f; transition: width .15s linear; }
+        #eduProgressText { margin-top: 3px; color: #666; }
+
+        .spin-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+        .spin-row button { padding: 6px 14px; font-size: 13px; cursor: pointer; }
+        .spin-row button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+        .filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+        .filter-lbl { font-size: 12px; color: #666; white-space: nowrap; }
+        .cf-btn {
+            padding: 4px 9px; border: 1px solid #ccc; background: #fafafa;
+            cursor: pointer; font-size: 12px; font-family: monospace;
+        }
+        .cf-btn:hover { border-color: #888; background: #f0f0f0; }
+        .cf-btn.loading { border-color: #888; background: #eee; opacity: .7; }
+        .cf-btn.idb { border-color: #888; border-style: dashed; }
+        .cf-btn.loaded { border-color: #2a9a2a; background: #f2fff2; color: #1a7a1a; font-weight: 700; border-style: solid; }
+        .idb-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; margin-bottom: 2px; }
+        .del-btn { font-size: 11px; font-family: monospace; color: #c33; cursor: pointer; background: none; border: 1px solid #f0c0c0; padding: 2px 7px; }
+
+        .log-hdr { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .log-lbl { font-size: 12px; color: #666; }
+        .log-clr { font-size: 11px; color: #888; cursor: pointer; background: none; border: none; padding: 0; text-decoration: underline; }
+        .log-box { font-family: monospace; font-size: 11px; line-height: 1.6; background: #fafafa; border: 1px solid #e8e8e8; padding: 6px 8px; height: 200px; overflow-y: auto; color: #444; }
+        .l-ok { color: #1a7a1a; }
+        .l-err { color: #c33; }
+        .l-dim { color: #888; }
+        .l-hi { color: #555; }
+        .l-data { color: #111; }
+    </style>
+</head>
+<body>
+
+<div class="hdr">
+    <div class="hdr-left">
+        <h1>Private key search</h1>
+        <a href="index.html">Mnemonic slot machine &#8599;</a>
+    </div>
+    <button type="button" class="hdr-btn" id="btnDebugToggle" title="Log &amp; filter tools" aria-pressed="false">debug</button>
+</div>
+
+<p class="warn-box">
+    <strong>Educational only.</strong> Do not paste real funded keys. This page scans a <em>numeric range</em> of private scalars and tests derived addresses against the local bloom filter.
+    Sequential keys use fast <code>pub + G</code> point steps after the first full multiply.
+</p>
+
+<div id="filterStatusTop" class="filter-status-top" style="display:none" role="status" aria-live="polite">
+    <span id="filterStatusMsg" class="filter-status-msg"></span>
+    <div class="filter-indeterminate" id="filterIndeterminate" style="display:none" aria-hidden="true"><div class="filter-indeterminate-bar"></div></div>
+    <div class="prog-wrap" id="cfProgress" style="display:none">
+        <div class="prog-bar"><div class="prog-fill" id="progFill"></div></div>
+        <div class="prog-txt">
+            <span id="progText">0%</span>
+            <button type="button" class="prog-cancel" onclick="cancelLoad()">cancel</button>
+        </div>
+    </div>
+</div>
+
+<div id="noFilterBanner">No filter loaded. Load the 512M filter below to scan. Server confirmations use 16G.</div>
+
+<div class="range-block">
+    <div class="range-row">
+        <div>
+            <label for="privStartHex">Start private key (hex, 1\u201364 hex digits)</label>
+            <input type="text" id="privStartHex" value="1" placeholder="e.g. 1 or full 32-byte hex" autocomplete="off" spellcheck="false" oninput="onPrivInputsChanged()">
+        </div>
+        <div>
+            <label for="privCount">How many keys to try (sequential)</label>
+            <input type="number" id="privCount" min="1" max="100000000" step="1" value="10000" oninput="onPrivInputsChanged()">
+        </div>
+    </div>
+    <div class="spin-row">
+        <button type="button" id="btnScan" onclick="toggleScan()">Start scan</button>
+        <button type="button" id="btnCheckpoint" onclick="clearCheckpoint()">Clear saved position</button>
+    </div>
+    <p style="font-size:11px;color:#666;margin-top:6px">Max keys per run: 100,000,000. Progress is saved every <span id="checkpointSpan">5000</span> keys (browser storage).</p>
+</div>
+
+<div class="scan-row">
+    <span>Address types (same pubkey, different scripts):</span>
+    <div class="scan-paths">
+        <label><input type="checkbox" id="addr44" checked onchange="onPrivInputsChanged()">Legacy <span class="path-type">P2PKH</span></label>
+        <label><input type="checkbox" id="addr49" checked onchange="onPrivInputsChanged()">Nested <span class="path-type">P2SH-P2WPKH</span></label>
+        <label><input type="checkbox" id="addr84" checked onchange="onPrivInputsChanged()">Native <span class="path-type">P2WPKH</span></label>
+        <label><input type="checkbox" id="addr86" checked onchange="onPrivInputsChanged()">Taproot <span class="path-type">P2TR</span></label>
+    </div>
+</div>
+
+<div id="privExplainer" class="scan-space-box" aria-live="polite"></div>
+
+<div id="eduStatsBox">
+    <div id="eduStatsAuto">Idle.</div>
+    <div id="eduProgressWrap">
+        <div id="eduProgressBar"><div id="eduProgressFill"></div></div>
+        <div id="eduProgressText">Range progress: 0%</div>
+    </div>
+</div>
+
+<div class="filter-row" id="filterRow">
+    <span class="filter-lbl">Local filter:</span>
+    <button type="button" class="cf-btn" data-mb="512" data-bits="32" onclick="filterClick(512,32)">512M</button>
+</div>
+
+<div class="idb-row" id="idbRow" style="display:none">
+    <span class="filter-lbl">Delete locally:</span>
+    <span id="idbDelList"></span>
+</div>
+
+<div class="log-hdr" id="logHdr" style="display:none">
+    <span class="log-lbl">Log</span>
+    <button type="button" class="log-clr" onclick="clearLog()">clear</button>
+</div>
+<div class="log-box" id="logConsole" style="display:none"></div>
+
+<script>
+'use strict';
+
+const DEBUG_STORAGE_KEY = 'btc_slot_debug_v1';
+let debugMode = localStorage.getItem(DEBUG_STORAGE_KEY) === '1';
+
+const CHECKPOINT_KEY = 'btc_priv_checkpoint_v1';
+const CHECKPOINT_EVERY = 5000;
+const MAX_COUNT = 100000000;
+/** RAF yield interval — larger = fewer UI stalls, higher sustained keys/s. */
+const YIELD_KEYS = 1024;
+const N_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n;
+
+// Batched server bloom confirmation (same idea as index.html pending hits — avoid 1 HTTP per local hit)
+const PRIV_FLUSH_BATCH = 40;
+const PRIV_FLUSH_INTERVAL_MS = 1200;
+const PRIV_FLUSH_MAX_QUEUE = 2000;
+let pendingPrivHits = [];
+let lastPrivFlushTime = Date.now();
+
+function syncDebugToggleUi() {
+    const btn = document.getElementById('btnDebugToggle');
+    if (btn) {
+        btn.classList.toggle('on', debugMode);
+        btn.setAttribute('aria-pressed', debugMode ? 'true' : 'false');
+    }
+}
+
+function setDebugMode(on) {
+    debugMode = !!on;
+    localStorage.setItem(DEBUG_STORAGE_KEY, debugMode ? '1' : '0');
+    syncDebugToggleUi();
+    updateDebugUiVisibility();
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmtMB(b) { return (b/1048576).toFixed(1)+' MB'; }
+function bytesToHex(b) { return Array.from(b).map(function(x){ return x.toString(16).padStart(2,'0'); }).join(''); }
+function hexToBytes(h) {
+    h = String(h).replace(/^0x/i, '').trim();
+    if (h.length % 2 === 1) h = '0' + h;
+    if (h.length === 0) return new Uint8Array(0);
+    return new Uint8Array(h.match(/.{2}/g).map(function(x) { return parseInt(x, 16); }));
+}
+
+const LOG_START = performance.now();
+function log(msg, type) {
+    if (!debugMode) return;
+    type = type || '';
+    const t = ((performance.now()-LOG_START)/1000).toFixed(2);
+    const el = document.getElementById('logConsole');
+    const row = document.createElement('div');
+    row.innerHTML = '<span class="l-dim">[' + t + ']</span> <span class="' + (type ? 'l-'+type : '') + '">' + esc(msg) + '</span>';
+    el.appendChild(row);
+    el.scrollTop = el.scrollHeight;
+}
+function clearLog() { document.getElementById('logConsole').innerHTML=''; log('cleared','dim'); }
+
+const FNV_PRIME  = 0x00000100000001B3n;
+const FNV_OFFSET = 0xCBF29CE484222325n;
+const MASK64     = (1n << 64n) - 1n;
+
+function fnv1a(key) {
+    const k = key.padEnd(64, '0');
+    let h = FNV_OFFSET;
+    for (let i = 0; i < 64; i += 2)
+        h = ((h ^ BigInt(parseInt(k.substring(i,i+2),16))) * FNV_PRIME) & MASK64;
+    return h;
+}
+
+const SERVER_MASK = (1n << 37n) - 1n;
+function serverPos(key) {
+    const trunc = fnv1a(key) & SERVER_MASK;
+    return [Number(trunc >> 6n), Number(trunc & 63n)];
+}
+
+const BAL_MASK = (1n << 37n) - 1n;
+function balPos(key) {
+    const trunc = fnv1a(key) & BAL_MASK;
+    return [Number(trunc >> 6n), Number(trunc & 63n)];
+}
+
+function isValidFilterKey(key) {
+    return typeof key === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(key.toLowerCase());
+}
+
+async function checkBalanceFilter(items) {
+    if (!items.length) return;
+    const validItems = [];
+    for (let i = 0; i < items.length; i++) {
+        const fk = String(items[i].filterKey || '').trim().toLowerCase();
+        if (isValidFilterKey(fk)) {
+            items[i].filterKey = fk;
+            validItems.push(items[i]);
+        } else {
+            items[i].balFound = null;
+        }
+    }
+    if (!validItems.length) return;
+    try {
+        const resp = await fetch('index_bal.php', { method: 'POST', body: packLookups(validItems.map(function(f) { return balPos(f.filterKey); })) });
+        const buf  = new Uint32Array(await resp.arrayBuffer());
+        for (let i = 0; i < validItems.length; i++) validItems[i].balFound = readBit(buf, i) === 1;
+    } catch(e) { log('balance filter error: ' + e.message, 'err'); }
+}
+
+function packLookups(positions) {
+    const buf  = new ArrayBuffer(positions.length * 5);
+    const view = new DataView(buf);
+    for (let i = 0; i < positions.length; i++) {
+        view.setUint32(i * 5,     positions[i][0], true);
+        view.setUint8 (i * 5 + 4, positions[i][1]);
+    }
+    return buf;
+}
+
+function readBit(buf, i) { return i < 32 ? (buf[0] >> i) & 1 : (buf[1] >> (i - 32)) & 1; }
+
+function openDB() {
+    return new Promise(function(res, rej) {
+        const req = indexedDB.open('btc_filter_cache', 1);
+        req.onupgradeneeded = function(e) { e.target.result.createObjectStore('filter'); };
+        req.onsuccess = function(e) { res(e.target.result); };
+        req.onerror   = function(e) { rej(e.target.error); };
+    });
+}
+
+async function idbSave(sizeMB, bitsExp, buffer) {
+    try {
+        const db = await openDB();
+        const tx = db.transaction('filter', 'readwrite');
+        tx.objectStore('filter').put({ sizeMB, bitsExp, buffer }, sizeMB);
+        await new Promise(function(res, rej) { tx.oncomplete = res; tx.onerror = rej; });
+        log('saved ' + sizeMB + 'MB to IndexedDB', 'dim');
+    } catch(e) { log('IDB write error: ' + e.message, 'dim'); }
+}
+
+async function idbLoad(sizeMB) {
+    try {
+        const db  = await openDB();
+        const tx  = db.transaction('filter', 'readonly');
+        const req = tx.objectStore('filter').get(sizeMB);
+        return await new Promise(function(res, rej) { req.onsuccess = function() { res(req.result||null); }; req.onerror = rej; });
+    } catch(e) { return null; }
+}
+
+async function idbDelete(sizeMB) {
+    try {
+        const db = await openDB();
+        const tx = db.transaction('filter', 'readwrite');
+        tx.objectStore('filter').delete(sizeMB);
+        await new Promise(function(res, rej) { tx.oncomplete = res; tx.onerror = rej; });
+    } catch(e) {}
+}
+
+async function idbKeys() {
+    try {
+        const db  = await openDB();
+        const tx  = db.transaction('filter', 'readonly');
+        const req = tx.objectStore('filter').getAllKeys();
+        return await new Promise(function(res, rej) { req.onsuccess = function() { res(req.result||[]); }; req.onerror = rej; });
+    } catch(e) { return []; }
+}
+
+async function refreshIDBState() {
+    const keys = await idbKeys();
+    document.querySelectorAll('.cf-btn').forEach(function(b) {
+        const mb = parseInt(b.dataset.mb);
+        if (b.classList.contains('loaded')) return;
+        b.classList.toggle('idb', keys.includes(mb));
+    });
+    const delRow  = document.getElementById('idbRow');
+    const delList = document.getElementById('idbDelList');
+    if (!keys.length || !debugMode) { delRow.style.display = 'none'; return; }
+    delRow.style.display = '';
+    delList.innerHTML = '';
+    const labels = { 512:'512M' };
+    keys.sort(function(a,b){return a-b;}).forEach(function(mb) {
+        const btn = document.createElement('button');
+        btn.className = 'del-btn';
+        btn.type = 'button';
+        btn.textContent = (labels[mb] || mb+'M') + ' \xd7';
+        btn.onclick = async function() {
+            await idbDelete(mb);
+            if (cf.sizeMB === mb) deactivateFilter();
+            const b2 = document.querySelector('.cf-btn[data-mb="' + mb + '"]');
+            if (b2) b2.classList.remove('idb','loaded');
+            log('deleted ' + mb + 'MB from IndexedDB', 'dim');
+            refreshIDBState();
+        };
+        delList.appendChild(btn);
+    });
+}
+
+function updateDebugUiVisibility() {
+    const logHdr = document.getElementById('logHdr');
+    const logBox = document.getElementById('logConsole');
+    const filterRow = document.getElementById('filterRow');
+    const idbRow = document.getElementById('idbRow');
+
+    if (!debugMode) {
+        if (logHdr) logHdr.style.display = 'none';
+        if (logBox) logBox.style.display = 'none';
+        if (filterRow) filterRow.style.display = cf.view ? 'none' : '';
+        if (idbRow && cf.view) idbRow.style.display = 'none';
+        return;
+    }
+
+    if (logHdr) logHdr.style.display = '';
+    if (logBox) logBox.style.display = '';
+    if (filterRow) filterRow.style.display = '';
+}
+
+const cf = { buffer: null, view: null, sizeMB: null, bitsExp: null, abort: null };
+
+function clientLookup(filterKey) {
+    if (!cf.view) return null;
+    const t0    = performance.now();
+    const fullH = fnv1a(filterKey);
+    const trunc = fullH & ((1n << BigInt(cf.bitsExp)) - 1n);
+    const row   = Number(trunc >> 6n);
+    const col   = Number(trunc & 63n);
+    const lo    = cf.view.getUint32(row*8,   true);
+    const hi    = cf.view.getUint32(row*8+4, true);
+    const chunk = BigInt(lo) | (BigInt(hi) << 32n);
+    const found = (chunk & (1n << BigInt(col))) !== 0n;
+    return { found, ms: (performance.now()-t0).toFixed(4) };
+}
+
+function activateFilter(sizeMB, bitsExp, buffer) {
+    cf.buffer  = buffer;
+    cf.view    = new DataView(buffer);
+    cf.sizeMB  = sizeMB;
+    cf.bitsExp = bitsExp;
+    document.querySelectorAll('.cf-btn').forEach(function(b) {
+        if (b.classList.contains('loaded')) {
+            b.classList.remove('loaded');
+            idbKeys().then(function(keys) { if (keys.includes(parseInt(b.dataset.mb))) b.classList.add('idb'); });
+        }
+    });
+    const activeBtn = document.querySelector('.cf-btn[data-mb="' + sizeMB + '"]');
+    if (activeBtn) activeBtn.classList.add('loaded');
+    localStorage.setItem('btc_active_filter', String(sizeMB));
+    document.getElementById('noFilterBanner').style.display = 'none';
+    updateDebugUiVisibility();
+}
+
+function deactivateFilter() {
+    const mb = cf.sizeMB;
+    cf.buffer = cf.view = cf.sizeMB = cf.bitsExp = null;
+    refreshIDBState();
+    localStorage.removeItem('btc_active_filter');
+    document.getElementById('noFilterBanner').style.display = '';
+    if (mb) log(mb + 'MB deactivated', 'dim');
+    updateDebugUiVisibility();
+}
+
+function setFilterTopLoading(message) {
+    const wrap = document.getElementById('filterStatusTop');
+    const ind = document.getElementById('filterIndeterminate');
+    const prog = document.getElementById('cfProgress');
+    const msg = document.getElementById('filterStatusMsg');
+    const banner = document.getElementById('noFilterBanner');
+    if (!wrap || !msg) return;
+    wrap.style.display = 'block';
+    wrap.classList.remove('has-prog');
+    msg.textContent = message;
+    if (ind) ind.style.display = 'block';
+    if (prog) prog.style.display = 'none';
+    if (banner) banner.style.display = 'none';
+}
+
+function clearFilterTopLoading(opts) {
+    opts = opts || {};
+    const wrap = document.getElementById('filterStatusTop');
+    const ind = document.getElementById('filterIndeterminate');
+    const prog = document.getElementById('cfProgress');
+    const msg = document.getElementById('filterStatusMsg');
+    const banner = document.getElementById('noFilterBanner');
+    if (ind) ind.style.display = 'none';
+    if (msg) msg.textContent = '';
+    if (prog) prog.style.display = 'none';
+    if (wrap) {
+        wrap.style.display = 'none';
+        wrap.classList.remove('has-prog');
+    }
+    if (banner && !cf.view && !opts.skipBannerRestore) banner.style.display = '';
+}
+
+async function filterClick(sizeMB, bitsExp) {
+    if (sizeMB !== 512) return;
+    if (cf.sizeMB === sizeMB) { deactivateFilter(); return; }
+    if (cf.abort) { cf.abort.abort(); cf.abort = null; showProgress(false); }
+    setFilterTopLoading('Loading local filter from browser storage\u2026');
+    const cached = await idbLoad(sizeMB);
+    if (cached) {
+        activateFilter(sizeMB, bitsExp, cached.buffer);
+        clearFilterTopLoading();
+        log('loaded ' + sizeMB + 'MB from IndexedDB', 'ok');
+        return;
+    }
+    clearFilterTopLoading({ skipBannerRestore: true });
+    const btn = document.querySelector('.cf-btn[data-mb="' + sizeMB + '"]');
+    if (btn) { btn.classList.remove('idb','loaded'); btn.classList.add('loading'); }
+    showProgress(true, 0, sizeMB*1048576, 0);
+    cf.abort = new AbortController();
+    const t0 = performance.now();
+    log('downloading ' + sizeMB + 'mb.bin', 'hi');
+    try {
+        const resp = await fetch('filter/' + sizeMB + 'mb.bin', { signal: cf.abort.signal });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const reader     = resp.body.getReader();
+        const totalBytes = sizeMB * 1048576;
+        const chunks     = [];
+        let received = 0, lastSpeedRec = 0, lastSpeedT = t0, speed = 0;
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            const now = performance.now();
+            const dT  = (now - lastSpeedT) / 1000;
+            if (dT > 0.15) { speed = (received-lastSpeedRec)/dT/1048576; lastSpeedRec=received; lastSpeedT=now; }
+            showProgress(true, received, totalBytes, speed);
+        }
+        const dlSec  = ((performance.now()-t0)/1000).toFixed(2);
+        const avgSpd = (received/1048576/parseFloat(dlSec)).toFixed(1);
+        log('done ' + dlSec + 's \xb7 ' + avgSpd + ' MB/s', 'ok');
+        const buf = new Uint8Array(received);
+        let pos = 0;
+        for (let i = 0; i < chunks.length; i++) { buf.set(chunks[i], pos); pos += chunks[i].length; }
+        activateFilter(sizeMB, bitsExp, buf.buffer);
+        showProgress(false);
+        await idbSave(sizeMB, bitsExp, cf.buffer);
+        refreshIDBState();
+    } catch (err) {
+        showProgress(false);
+        if (btn) { btn.classList.remove('loading'); }
+        log(err.name==='AbortError' ? 'cancelled' : 'error: ' + err.message, err.name==='AbortError' ? 'dim' : 'err');
+    }
+    cf.abort = null;
+}
+
+function cancelLoad() {
+    if (cf.abort) cf.abort.abort();
+    showProgress(false);
+}
+
+function showProgress(show, received, total, speed) {
+    received = received || 0;
+    total = total || 0;
+    speed = speed || 0;
+    const wrap = document.getElementById('filterStatusTop');
+    const ind = document.getElementById('filterIndeterminate');
+    const prog = document.getElementById('cfProgress');
+    const msg = document.getElementById('filterStatusMsg');
+    const banner = document.getElementById('noFilterBanner');
+    if (!show) {
+        if (ind) ind.style.display = 'none';
+        if (prog) prog.style.display = 'none';
+        if (msg) msg.textContent = '';
+        if (wrap) {
+            wrap.style.display = 'none';
+            wrap.classList.remove('has-prog');
+        }
+        if (banner && !cf.view) banner.style.display = '';
+        return;
+    }
+    if (banner) banner.style.display = 'none';
+    if (ind) ind.style.display = 'none';
+    if (wrap) {
+        wrap.style.display = 'block';
+        wrap.classList.add('has-prog');
+    }
+    if (msg) msg.textContent = 'Downloading local filter (~512 MB)\u2026';
+    if (prog) prog.style.display = '';
+    if (total > 0) {
+        const pct = ((received/total)*100).toFixed(1);
+        document.getElementById('progFill').style.width = pct + '%';
+        const spd = speed > 0 ? ' \xb7 ' + speed.toFixed(1) + ' MB/s' : '';
+        document.getElementById('progText').textContent = pct + '%  ' + fmtMB(received) + ' / ' + fmtMB(total) + spd;
+    }
+}
+
+// ── CRYPTO ────────────────────────────────────────────────────────────────────
+const EC = new elliptic.ec('secp256k1');
+const G_GEN = EC.g || EC.curve.g;
+
+function bigIntToPriv32(k) {
+    if (k < 0n || k >= N_ORDER) return null;
+    const hex = k.toString(16).padStart(64, '0');
+    return hexToBytes(hex);
+}
+
+function hash160(bytes) {
+    const hex = bytesToHex(bytes);
+    const wa = CryptoJS.enc.Hex.parse(hex);
+    return hexToBytes(CryptoJS.RIPEMD160(CryptoJS.SHA256(wa)).toString());
+}
+
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+function base58Encode(bytes) {
+    if (!bytes.length) return '';
+    let n = BigInt('0x'+bytesToHex(bytes));
+    let r = '';
+    while (n > 0n) { r = B58[Number(n%58n)] + r; n /= 58n; }
+    for (let i = 0; i < bytes.length; i++) { if (bytes[i]!==0) break; r = '1'+r; }
+    return r;
+}
+function base58Check(payload) {
+    const p = new Uint8Array(payload);
+    const hex = bytesToHex(p);
+    const wa = CryptoJS.enc.Hex.parse(hex);
+    const chk = CryptoJS.SHA256(CryptoJS.SHA256(wa)).toString().slice(0,8);
+    return base58Encode(new Uint8Array(Array.from(p).concat(Array.from(hexToBytes(chk)))));
+}
+
+const B32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+const B32_GEN = [0x3b6a57b2,0x26508e6d,0x1ea119fa,0x3d4233dd,0x2a1462b3];
+function b32Polymod(v){let c=1;for(let i=0;i<v.length;i++){const d=v[i];const t=c>>25;c=((c&0x1ffffff)<<5)^d;for(let j=0;j<5;j++)if((t>>j)&1)c^=B32_GEN[j];}return c;}
+function b32HrpExpand(h){const r=[];for(let i=0;i<h.length;i++)r.push(h.charCodeAt(i)>>5);r.push(0);for(let i=0;i<h.length;i++)r.push(h.charCodeAt(i)&31);return r;}
+function b32Checksum(hrp,data){const v=b32HrpExpand(hrp).concat(data).concat([0,0,0,0,0,0]);const pm=b32Polymod(v)^1;return Array.from({length:6},function(_,i){return (pm>>(5*(5-i)))&31;});}
+function convertBits(data,from,to,pad){if(pad===undefined)pad=true;let acc=0,bits=0;const r=[],maxv=(1<<to)-1;for(let i=0;i<data.length;i++){const v=data[i];acc=(acc<<from)|v;bits+=from;while(bits>=to){bits-=to;r.push((acc>>bits)&maxv);}}if(pad&&bits>0)r.push((acc<<(to-bits))&maxv);return r;}
+function bech32P2wpkh(h160){const prog=[0].concat(convertBits(Array.from(h160),8,5));const cs=b32Checksum('bc',prog);return 'bc1'+prog.concat(cs).map(function(d){return B32_CHARSET[d];}).join('');}
+
+function taprootOutputKey(pub33) {
+    const xOnly = pub33.slice(1, 33);
+    const tagH  = CryptoJS.SHA256(CryptoJS.enc.Utf8.parse('TapTweak')).toString();
+    const twkH  = CryptoJS.SHA256(CryptoJS.enc.Hex.parse(tagH + tagH + bytesToHex(xOnly))).toString();
+    const P = EC.keyFromPublic(pub33).getPublic();
+    const T = EC.keyFromPrivate(hexToBytes(twkH)).getPublic();
+    const Q = P.add(T);
+    return new Uint8Array(Q.getX().toArrayLike(Uint8Array, 'be', 32));
+}
+function bech32mP2tr(xOnly32) {
+    const prog = [1].concat(convertBits(Array.from(xOnly32),8,5));
+    const v    = b32HrpExpand('bc').concat(prog).concat([0,0,0,0,0,0]);
+    const pm   = b32Polymod(v) ^ 0x2bc830a3;
+    const cs   = Array.from({length:6}, function(_,i){ return (pm >> (5*(5-i))) & 31; });
+    return 'bc1' + prog.concat(cs).map(function(d){ return B32_CHARSET[d]; }).join('');
+}
+function addrP2TR_pub(pub33) {
+    const xOnly = taprootOutputKey(pub33);
+    const fk    = bytesToHex(xOnly);
+    return { addr: bech32mP2tr(xOnly), h160: null, filterKey: fk };
+}
+
+function addrP2PKH_pub(pub33) {
+    const h = hash160(pub33);
+    const h160 = bytesToHex(h);
+    return { addr: base58Check([0x00].concat(Array.from(h))), h160: h160, filterKey: h160 };
+}
+function addrP2WPKH_pub(pub33) {
+    const h = hash160(pub33);
+    const h160 = bytesToHex(h);
+    return { addr: bech32P2wpkh(h), h160: h160, filterKey: h160 };
+}
+function addrP2SHP2WPKH_pub(pub33) {
+    const h = hash160(pub33);
+    const rs = new Uint8Array([0x00,0x14].concat(Array.from(h)));
+    const sh = hash160(rs);
+    const shHex = bytesToHex(sh);
+    return { addr: base58Check([0x05].concat(Array.from(sh))), h160: shHex, filterKey: shHex };
+}
+
+function pubPointToCompressed(pubPoint) {
+    const hex = pubPoint.encode('hex', true);
+    return hexToBytes(hex);
+}
+
+function getScanAddrDefs() {
+    const out = [];
+    if (document.getElementById('addr44').checked) out.push({ type: 'P2PKH', fn: addrP2PKH_pub });
+    if (document.getElementById('addr49').checked) out.push({ type: 'P2SH-P2WPKH', fn: addrP2SHP2WPKH_pub });
+    if (document.getElementById('addr84').checked) out.push({ type: 'P2WPKH', fn: addrP2WPKH_pub });
+    if (document.getElementById('addr86').checked) out.push({ type: 'P2TR', fn: addrP2TR_pub });
+    return out;
+}
+
+function parseStartHex() {
+    const raw = document.getElementById('privStartHex').value.trim().replace(/^0x/i, '');
+    if (!raw) return { ok: false, err: 'Enter a start hex private key.' };
+    if (!/^[0-9a-fA-F]+$/.test(raw)) return { ok: false, err: 'Start key must be hexadecimal.' };
+    if (raw.length > 64) return { ok: false, err: 'Hex length must be at most 64 (32 bytes).' };
+    let k = BigInt('0x' + raw);
+    if (k === 0n) return { ok: false, err: 'Private key must be at least 1.' };
+    if (k >= N_ORDER) return { ok: false, err: 'Private key must be less than the secp256k1 curve order.' };
+    return { ok: true, k: k };
+}
+
+function parseCount() {
+    const n = parseInt(document.getElementById('privCount').value, 10);
+    if (!isFinite(n) || n < 1) return { ok: false, err: 'Count must be at least 1.' };
+    if (n > MAX_COUNT) return { ok: false, err: 'Count exceeds maximum (' + MAX_COUNT.toLocaleString() + ').' };
+    return { ok: true, n: n };
+}
+
+let scanRunning = false;
+let scanAbort = false;
+let pageStartTime = Date.now();
+let totalKeysScanned = 0;
+let totalAddrChecked = 0;
+function onPrivInputsChanged() {
+    updatePrivExplainer();
+}
+
+function formatBigIntGrouped(n) {
+    return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function updatePrivExplainer() {
+    const el = document.getElementById('privExplainer');
+    const c = parseCount();
+    const defs = getScanAddrDefs();
+    const parts = [];
+    parts.push('<p class="sse-line">Valid private scalars are integers <strong>1</strong> to <strong>n\u22121</strong> (curve order n). Each step uses <code>pub\u2099\u208a\u2081 = pub\u2099 + G</code> after the first full multiply.</p>');
+    if (c.ok) {
+        const addrPer = defs.length;
+        const totalBloom = BigInt(c.n) * BigInt(Math.max(1, addrPer));
+        parts.push('<p class="sse-line" style="margin-top:8px">This run would check up to <span class="sse-num">' + esc(String(c.n)) + '</span> keys \xd7 '
+            + addrPer + ' address type(s) = <span class="sse-num">' + esc(formatBigIntGrouped(totalBloom)) + '</span> bloom lookups (if the range stays valid).</p>');
+    }
+    parts.push('<p class="sse-sub">Stops early if the range would pass the curve order (invalid keys are skipped). Local bloom hits are <strong>batched</strong> (' + PRIV_FLUSH_BATCH + '+ per HTTP request, or every ' + (PRIV_FLUSH_INTERVAL_MS / 1000) + 's) for server confirmation.</p>');
+    el.innerHTML = parts.join('');
+}
+
+function readCheckpoint() {
+    try {
+        const raw = localStorage.getItem(CHECKPOINT_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (e) { return null; }
+}
+
+function writeCheckpoint(startHex, offsetStr, countNum) {
+    try {
+        localStorage.setItem(CHECKPOINT_KEY, JSON.stringify({
+            startHex: startHex,
+            offset: offsetStr,
+            count: countNum,
+            savedAt: Date.now()
+        }));
+    } catch (e) {}
+}
+
+function clearCheckpoint() {
+    try { localStorage.removeItem(CHECKPOINT_KEY); } catch (e) {}
+    log('checkpoint cleared', 'dim');
+}
+
+function yieldToUi() {
+    return new Promise(function(res) { requestAnimationFrame(function() { requestAnimationFrame(res); }); });
+}
+
+async function flushPrivHits() {
+    if (pendingPrivHits.length === 0) return;
+    lastPrivFlushTime = Date.now();
+    const batch = pendingPrivHits.splice(0);
+    const uniqueKeys = [];
+    const seenKey = {};
+    for (let i = 0; i < batch.length; i++) {
+        const fk = batch[i].filterKey;
+        if (!seenKey[fk]) { seenKey[fk] = true; uniqueKeys.push(fk); }
+    }
+    const lookups = uniqueKeys.map(serverPos);
+    try {
+        const t0 = performance.now();
+        const resp = await fetch('index.php', { method: 'POST', body: packLookups(lookups) });
+        const buf = new Uint32Array(await resp.arrayBuffer());
+        const ms = (performance.now() - t0).toFixed(1);
+        const keyResult = {};
+        for (let i = 0; i < uniqueKeys.length; i++) keyResult[uniqueKeys[i]] = readBit(buf, i) === 1;
+        const confirmed = [];
+        for (let i = 0; i < batch.length; i++) {
+            const item = batch[i];
+            if (keyResult[item.filterKey] === true) confirmed.push(item);
+        }
+        if (confirmed.length) {
+            log('server batch ' + batch.length + ' local \u2192 ' + confirmed.length + ' confirmed \xb7 ' + ms + 'ms', 'dim');
+            await checkBalanceFilter(confirmed);
+            for (let ci = 0; ci < confirmed.length; ci++) {
+                const c = confirmed[ci];
+                log('CONFIRMED ' + c.type + ' ' + c.addr + ' \xb7 key …' + (c.keyHex || '').slice(-12), c.balFound ? 'ok' : 'data');
+            }
+        } else if (batch.length) {
+            log('server batch ' + batch.length + ' local \u2192 0 confirmed (false positives) \xb7 ' + ms + 'ms', 'dim');
+        }
+    } catch (e) {
+        log('batch server error: ' + e.message, 'err');
+    }
+}
+
+/** Flush when queue is big enough, timed out, or forced at end of scan. */
+async function maybeFlushPrivHits(force) {
+    if (pendingPrivHits.length === 0) return;
+    const now = Date.now();
+    if (!force) {
+        if (pendingPrivHits.length < PRIV_FLUSH_MAX_QUEUE &&
+            pendingPrivHits.length < PRIV_FLUSH_BATCH &&
+            (now - lastPrivFlushTime) < PRIV_FLUSH_INTERVAL_MS) {
+            return;
+        }
+    }
+    await flushPrivHits();
+}
+
+function setScanUi(running) {
+    document.getElementById('btnScan').textContent = running ? 'Stop' : 'Start scan';
+    document.getElementById('privStartHex').disabled = running;
+    document.getElementById('privCount').disabled = running;
+    ['addr44','addr49','addr84','addr86'].forEach(function(id) {
+        const el = document.getElementById(id);
+        if (el) el.disabled = running;
+    });
+}
+
+function updateScanStats(currentOffset, totalCount) {
+    const elapsed = (Date.now() - pageStartTime) / 1000;
+    const kps = elapsed > 0 ? (totalKeysScanned / elapsed).toFixed(0) : '0';
+    const aps = elapsed > 0 ? (totalAddrChecked / elapsed).toFixed(0) : '0';
+    let html = totalKeysScanned.toLocaleString() + ' keys \xb7 ' + kps + ' keys/s \xb7 '
+        + totalAddrChecked.toLocaleString() + ' addr \xb7 ' + aps + ' addr/s';
+    const remain = totalCount - currentOffset;
+    if (scanRunning && remain > 0 && totalKeysScanned > 0 && elapsed > 0.5) {
+        const rate = totalKeysScanned / elapsed;
+        if (rate > 0) {
+            const etaSec = remain / rate;
+            html += ' \xb7 ETA ~' + formatEta(etaSec);
+        }
+    }
+    document.getElementById('eduStatsAuto').innerHTML = html;
+    let pct = totalCount > 0 ? (currentOffset / totalCount) * 100 : 0;
+    if (pct > 100) pct = 100;
+    document.getElementById('eduProgressFill').style.width = pct + '%';
+    document.getElementById('eduProgressText').textContent = 'Range progress: '
+        + currentOffset.toLocaleString() + ' / ' + totalCount.toLocaleString()
+        + ' (' + pct.toFixed(2) + '%)';
+}
+
+function formatEta(sec) {
+    if (!isFinite(sec) || sec < 0) return '?';
+    if (sec < 60) return Math.round(sec) + 's';
+    if (sec < 3600) return Math.round(sec / 60) + 'm';
+    if (sec < 86400) return Math.round(sec / 3600) + 'h';
+    return Math.round(sec / 86400) + 'd';
+}
+
+async function toggleScan() {
+    if (scanRunning) {
+        scanAbort = true;
+        return;
+    }
+    if (!cf.view) {
+        alert('Load the 512M local filter first.');
+        return;
+    }
+    const st = parseStartHex();
+    if (!st.ok) { alert(st.err); return; }
+    const cnt = parseCount();
+    if (!cnt.ok) { alert(cnt.err); return; }
+    const defs = getScanAddrDefs();
+    if (!defs.length) {
+        alert('Select at least one address type.');
+        return;
+    }
+
+    let startK = st.k;
+    let offset = 0;
+    const cp = readCheckpoint();
+    const startHexNormalized = '0x' + startK.toString(16);
+    if (cp && cp.startHex === startHexNormalized && parseInt(cp.count, 10) === cnt.n) {
+        try {
+            const o = BigInt(cp.offset || '0');
+            if (o > 0n && o < BigInt(cnt.n)) {
+                if (confirm('Resume from saved offset ' + o.toString() + '? (Cancel = start from beginning)')) {
+                    offset = Number(o);
+                    startK = startK + o;
+                }
+            }
+        } catch (e) {}
+    }
+
+    if (startK >= N_ORDER || startK === 0n) {
+        alert('Start key out of valid range after resume adjustment.');
+        return;
+    }
+
+    const priv0 = bigIntToPriv32(startK);
+    if (!priv0) {
+        alert('Invalid key at range start.');
+        return;
+    }
+
+    scanRunning = true;
+    scanAbort = false;
+    setScanUi(true);
+    pageStartTime = Date.now();
+    totalKeysScanned = 0;
+    totalAddrChecked = 0;
+    log('scan start at offset ' + offset + ' \xb7 +G fast path', 'hi');
+
+    let pubPoint = EC.keyFromPrivate(priv0).getPublic();
+    let kCurrent = startK;
+    let resumeNext = offset;
+
+    try {
+        for (let step = offset; step < cnt.n; step++) {
+            if (scanAbort) {
+                log('stopped by user', 'dim');
+                break;
+            }
+            if (kCurrent >= N_ORDER || kCurrent === 0n) {
+                log('reached invalid scalar (curve order); stopping', 'dim');
+                break;
+            }
+
+            const pub33 = pubPointToCompressed(pubPoint);
+            const keyHex = bytesToHex(bigIntToPriv32(kCurrent));
+
+            for (let di = 0; di < defs.length; di++) {
+                const d = defs[di];
+                const row = d.fn(pub33);
+                totalAddrChecked++;
+                const res = clientLookup(row.filterKey);
+                if (res && res.found) {
+                    pendingPrivHits.push({
+                        type: d.type,
+                        addr: row.addr,
+                        h160: row.h160,
+                        filterKey: row.filterKey,
+                        keyHex: keyHex
+                    });
+                    log('LOCAL HIT ' + d.type + ' ' + row.addr + ' (queued)', 'ok');
+                }
+            }
+            totalKeysScanned++;
+
+            await maybeFlushPrivHits(false);
+
+            resumeNext = step + 1;
+            if (resumeNext % CHECKPOINT_EVERY === 0)
+                writeCheckpoint(startHexNormalized, String(BigInt(resumeNext)), cnt.n);
+
+            const nextStep = step + 1;
+            if (nextStep >= cnt.n) break;
+
+            kCurrent = kCurrent + 1n;
+            if (kCurrent >= N_ORDER) { log('next key would exceed order; stopping', 'dim'); break; }
+            try {
+                pubPoint = pubPoint.add(G_GEN);
+            } catch (e) {
+                log('EC add G failed: ' + e.message + ' \u2014 falling back to multiply', 'err');
+                const pb = bigIntToPriv32(kCurrent);
+                if (!pb) break;
+                pubPoint = EC.keyFromPrivate(pb).getPublic();
+            }
+
+            if ((step - offset + 1) % YIELD_KEYS === 0) {
+                updateScanStats(nextStep, cnt.n);
+                await yieldToUi();
+            }
+        }
+
+        writeCheckpoint(startHexNormalized, String(BigInt(resumeNext)), cnt.n);
+    } finally {
+        try {
+            await maybeFlushPrivHits(true);
+        } catch (e) {}
+        pendingPrivHits.length = 0;
+        lastPrivFlushTime = Date.now();
+        scanRunning = false;
+        scanAbort = false;
+        setScanUi(false);
+        updateScanStats(Math.min(cnt.n, resumeNext), cnt.n);
+    }
+}
+
+document.getElementById('checkpointSpan').textContent = String(CHECKPOINT_EVERY);
+
+window.addEventListener('DOMContentLoaded', async function() {
+    syncDebugToggleUi();
+    document.getElementById('btnDebugToggle').addEventListener('click', function() {
+        setDebugMode(!debugMode);
+        updateDebugUiVisibility();
+    });
+    await refreshIDBState();
+    updatePrivExplainer();
+
+    const lastMB = parseInt(localStorage.getItem('btc_active_filter') || '0', 10);
+    if (lastMB === 512) {
+        setFilterTopLoading('Loading local filter from browser storage\u2026');
+        try {
+            const cached = await idbLoad(lastMB);
+            if (cached) {
+                activateFilter(cached.sizeMB, cached.bitsExp, cached.buffer);
+                log('restored ' + cached.sizeMB + 'MB filter from IndexedDB', 'ok');
+            }
+        } finally {
+            clearFilterTopLoading();
+        }
+    } else {
+        if (lastMB && lastMB !== 512) localStorage.removeItem('btc_active_filter');
+    }
+    updateDebugUiVisibility();
+    const __pc = parseCount();
+    updateScanStats(0, __pc.ok ? __pc.n : 1);
+});
+</script>
+</body>
+</html>
