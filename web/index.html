@@ -135,6 +135,7 @@
         }
         .scan-paths { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .scan-paths label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+        .scan-paths .path-type { font-family: monospace; font-size: 11px; color: #444; }
         .scan-idx { display: inline-flex; align-items: center; gap: 4px; }
         .scan-idx input {
             width: 56px;
@@ -162,11 +163,11 @@
         .ss-row { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid #f0f0f0; padding: 2px 0; }
         .ss-row:last-child { border-bottom: none; }
         .ss-tag { font-family: monospace; font-size: 10px; color: #888; min-width: 76px; }
-        .ss-addr { font-family: monospace; font-size: 11px; flex: 1; min-width: 0; word-break: break-all; }
+        .ss-addr { font-family: monospace; font-size: 11px; flex: 1; min-width: 0; word-break: break-all; color: #111; text-decoration: none; }
+        .ss-addr:hover { text-decoration: underline; color: #333; }
         .ss-money { font-family: monospace; font-size: 10px; white-space: nowrap; }
         .ss-money.yes { color: #1a7a1a; font-weight: 700; }
         .ss-money.no { color: #888; }
-        .ss-srv { font-size: 10px; font-family: monospace; white-space: nowrap; color: #666; }
         .ss-mp { font-size: 10px; color: #888; text-decoration: none; white-space: nowrap; }
         .ss-mp:hover { color: #333; text-decoration: underline; }
 
@@ -289,10 +290,10 @@
 <div class="scan-row">
     <span>Paths:</span>
     <div class="scan-paths">
-        <label><input type="checkbox" id="path44" checked onchange="saveScanSettings()">Legacy (44)</label>
-        <label><input type="checkbox" id="path49" checked onchange="saveScanSettings()">Nested SegWit (49)</label>
-        <label><input type="checkbox" id="path84" checked onchange="saveScanSettings()">Native SegWit (84)</label>
-        <label><input type="checkbox" id="path86" checked onchange="saveScanSettings()">Taproot (86)</label>
+        <label><input type="checkbox" id="path44" checked onchange="saveScanSettings()">Legacy <span class="path-type">P2PKH</span> (44)</label>
+        <label><input type="checkbox" id="path49" checked onchange="saveScanSettings()">Nested SegWit <span class="path-type">P2SH-P2WPKH</span> (49)</label>
+        <label><input type="checkbox" id="path84" checked onchange="saveScanSettings()">Native SegWit <span class="path-type">P2WPKH</span> (84)</label>
+        <label><input type="checkbox" id="path86" checked onchange="saveScanSettings()">Taproot <span class="path-type">P2TR</span> (86)</label>
     </div>
     <span class="scan-idx">Per path: <input type="number" id="pathCount" min="1" max="2000" step="1" value="5" oninput="saveScanSettings()" onchange="saveScanSettings()"></span>
 </div>
@@ -940,7 +941,6 @@ function renderHitsHistory() {
     if (!hist.length) { section.style.display = 'none'; return; }
     section.style.display = '';
     list.innerHTML = '';
-    const btc = function(sat) { return (sat / 1e8).toFixed(8) + '\xa0BTC'; };
     hist.forEach(function(entry, idx) {
         const div = document.createElement('div');
         const hasKnownUtxoFlag = (entry.found || []).some(function(f) { return typeof f.sqliteHasUtxo === 'boolean'; });
@@ -952,18 +952,13 @@ function renderHitsHistory() {
         const ts = new Date(entry.ts).toLocaleString();
         let addrHtml = '';
         entry.found.forEach(function(f) {
-            const srv = f.serverFound === true ? ' <span style="color:#1a7a1a">\u2713srv</span>'
-                      : f.serverFound === false ? ' <span style="color:#888">?srv</span>' : '';
-            const bal = f.serverFound === true
-                      ? (f.balFound === true ? ' <span style="color:#1a7a1a">\u2713btc</span>'
-                      : f.balFound === false  ? ' <span style="color:#888">nobal</span>' : '') : '';
             const key32 = normalizeKey32Hex(f.filterKey || '');
-            const sqliteTxt = (f.sqliteHasUtxo === true)
-                ? ('utxo\xa0' + Number(f.sqliteCount || 0) + '\xa0·\xa0bal\xa0' + btc(Number(f.sqliteTotalSat || 0)))
-                : (typeof f.sqliteHasUtxo === 'boolean' ? 'no utxo' : '');
+            const sqliteTxt = typeof f.sqliteHasUtxo === 'boolean'
+                ? formatSqliteBalanceLine(f)
+                : '';
             const sqliteColor = f.sqliteHasUtxo === true ? '#1a7a1a' : '#b8860b';
             addrHtml += '<div class="hits-entry-addr" data-key32="' + esc(key32) + '" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">'
-                + '<span>' + esc(f.type) + ' ' + esc(f.addr) + srv + bal + '</span>'
+                + '<span>' + esc(f.type) + ' ' + esc(f.addr) + '</span>'
                 + '<span class="res-bal" style="font-size:11px;font-family:monospace;white-space:nowrap;flex:1;color:' + sqliteColor + '">' + esc(sqliteTxt) + '</span>'
                 + '<a href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank" onclick="event.stopPropagation()" class="res-link">mempool&#8599;</a>'
                 + '</div>';
@@ -1007,6 +1002,26 @@ function setSlotWord(idx, word) {
     void slot.offsetWidth; // reflow to restart animation
     slot.classList.add('flash');
     wEl.textContent = word;
+}
+
+/** Funded test mnemonic: land abandon on reels 1–11, then reel 12 shows abandon briefly before about (avoids “skipping” the last abandon). */
+async function animateFundedTestSlots(words) {
+    const delay = function(ms) { return new Promise(function(r) { setTimeout(r, ms); }); };
+    const step = 85;
+    const isStd = words.length === 12
+        && words.slice(0, 11).every(function(w) { return w === 'abandon'; })
+        && words[11] === 'about';
+    if (!isStd) {
+        for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
+        return;
+    }
+    for (let i = 0; i < 11; i++) {
+        setSlotWord(i, 'abandon');
+        await delay(step);
+    }
+    setSlotWord(11, 'abandon');
+    await delay(Math.round(step * 2.2));
+    setSlotWord(11, 'about');
 }
 
 function renderCurrentWordsToSlots() {
@@ -1134,6 +1149,30 @@ function fmtSatBtc(sat) {
     return (Number(sat) / 1e8).toFixed(8) + '\xa0BTC';
 }
 
+/** Compact BTC for UI (avoids long technical sqlite lines). */
+function fmtBtcHuman(sat) {
+    const n = Number(sat) || 0;
+    if (n <= 0) return '0 BTC';
+    const btc = n / 1e8;
+    if (btc >= 100) return btc.toFixed(2) + ' BTC';
+    if (btc >= 1) return btc.toFixed(2) + ' BTC';
+    if (btc >= 0.01) return btc.toFixed(4) + ' BTC';
+    return btc.toFixed(8) + ' BTC';
+}
+
+/** Snapshot balance line: positive = human BTC; empty snapshot = 0 BTC; optional note if 16G saw unspent but snapshot has none. */
+function formatSqliteBalanceLine(r) {
+    if (typeof r.sqliteHasUtxo !== 'boolean') return '';
+    if (r.sqliteHasUtxo === true) {
+        const c = Number(r.sqliteCount || 0);
+        const sat = Number(r.sqliteTotalSat || 0);
+        let s = fmtBtcHuman(sat);
+        if (c > 1) s += ' · ' + c + ' outs';
+        return s;
+    }
+    return '0 BTC';
+}
+
 // Per-spin cache so saveHitToHistory + manual UI share one HTTP round-trip per key32.
 let sqliteKeyCache = {};
 function clearSqliteKeyCache() { sqliteKeyCache = {}; }
@@ -1149,7 +1188,7 @@ async function enrichHistoryCandidatesWithSqlite(items) {
         if (sqliteKeyCache[k] === undefined) uniqueKeys.push(k);
     }
     await Promise.all(uniqueKeys.map(function(k, idx) {
-        return fetch('balance_lookup.php?key32=' + encodeURIComponent(k) + '&limit=1&_cb=' + Date.now() + '_' + idx)
+        return fetch('balance_lookup.php?key32=' + encodeURIComponent(k) + '&limit=200&_cb=' + Date.now() + '_' + idx)
             .then(function(resp) { return resp.ok ? resp.json() : null; })
             .then(function(data) {
                 if (!data || data.ok !== true) {
@@ -1238,26 +1277,12 @@ function renderSingleSpinResults(words, rows, opts) {
     html += '<div class="ss-head">' + rows.length + ' addresses</div>';
     for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
-        const sqliteTxt = typeof r.sqliteHasUtxo === 'boolean'
-            ? (r.sqliteHasUtxo === true
-                ? ('sqlite utxo\xa0' + Number(r.sqliteCount || 0) + '\xa0·\xa0' + fmtSatBtc(r.sqliteTotalSat || 0))
-                : 'sqlite: no utxo')
-            : '';
+        const sqliteTxt = formatSqliteBalanceLine(r);
         const sqliteColor = typeof r.sqliteHasUtxo === 'boolean' ? (r.sqliteHasUtxo === true ? '#1a7a1a' : '#888') : '#888';
-        let srvTxt = '';
-        if (r.serverFound === true) srvTxt = 'srv \u2713';
-        else if (r.serverFound === false) srvTxt = 'srv \u2717';
-        let balTxt = '';
-        if (r.serverFound === true) {
-            if (r.balFound === true) balTxt = 'bal \u2713';
-            else if (r.balFound === false) balTxt = 'bal \u2717';
-        }
         html += '<div class="ss-row">'
             + '<span class="ss-tag">' + esc(r.type) + '[' + r.index + ']</span>'
-            + '<span class="ss-addr">' + esc(r.addr) + '</span>'
-            + '<span class="ss-srv">' + esc(srvTxt) + '</span>'
-            + '<span class="ss-srv">' + esc(balTxt) + '</span>'
-            + '<span class="ss-money ' + (r.money === 'yes' ? 'yes' : 'no') + '">' + (r.money === 'yes' ? 'local' : 'no local') + '</span>'
+            + '<a class="ss-addr" href="test.html?address=' + encodeURIComponent(r.addr) + '">' + esc(r.addr) + '</a>'
+            + '<span class="ss-money ' + (r.money === 'yes' ? 'yes' : 'no') + '">' + (r.money === 'yes' ? 'unspent' : '\u2014') + '</span>'
             + '<span class="ss-sqlite" style="font-size:10px;font-family:monospace;white-space:nowrap;color:' + sqliteColor + '">' + esc(sqliteTxt) + '</span>'
             + '<a class="ss-mp" href="https://mempool.space/address/' + encodeURIComponent(r.addr) + '" target="_blank" rel="noopener">mempool&#8599;</a>'
             + '</div>';
@@ -1327,7 +1352,6 @@ function updateAutoStats() {
     document.getElementById('eduStatsTop').innerHTML =
         'Speed: ' + spsAll + '/s'
         + ' <span class="stat-sep">·</span> Space: ' + formatBigIntShort(totalComb)
-        + ' <span class="stat-sep">·</span> Tried: ' + formatBigIntShort(checkedInState)
         + ' <span class="stat-sep">·</span> ETA: ' + eta;
     if (fill) {
         fill.style.width = widthPct + '%';
@@ -1430,6 +1454,7 @@ async function _doSpin(fixedWords, opts) {
     lastSpinExhaustiveDone = false;
     lastSpinFundedWords = '';
     const serverOnly = !!(opts && opts.serverOnly);
+    const animateFundedTest = !!(opts && opts.animateFundedTest);
     const isAuto = autoSpinning; // capture now — consistent for the whole spin
     const btn = document.getElementById('btnSpin');
     btn.disabled = true;
@@ -1448,7 +1473,11 @@ async function _doSpin(fixedWords, opts) {
     if (!isAuto) history.replaceState(null, '', '?m=' + wordsToUrlParam(words));
 
     // 3. Display in slots with animation
-    for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
+    if (animateFundedTest && !isAuto) {
+        await animateFundedTestSlots(words);
+    } else {
+        for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
+    }
 
     if (!isAuto) log((spinPlan.exhaustive ? '[exhaustive] ' : '') + 'mnemonic: ' + words.join(' '), 'hi');
 
@@ -1698,7 +1727,7 @@ window.addEventListener('DOMContentLoaded', async function() {
         setDebugMode(!debugMode);
     });
     document.getElementById('btnFundedTest').addEventListener('click', function() {
-        doSpin(Array(11).fill('abandon').concat(['about']), { serverOnly: true });
+        doSpin(Array(11).fill('abandon').concat(['about']), { serverOnly: true, animateFundedTest: true });
     });
     updateDebugUiVisibility();
     await refreshIDBState();
