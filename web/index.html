@@ -21,10 +21,34 @@
         }
 
         /* header */
-        .hdr { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+        .hdr {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        .hdr-left { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+        .hdr-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
         .hdr h1 { font-size: 16px; font-weight: 700; }
         .hdr a  { font-size: 12px; color: #666; text-decoration: none; }
         .hdr a:hover { text-decoration: underline; }
+        .hdr-btn {
+            padding: 4px 10px;
+            border: 1px solid #ccc;
+            background: #fafafa;
+            cursor: pointer;
+            font-size: 11px;
+            font-family: monospace;
+            color: #444;
+        }
+        .hdr-btn:hover { border-color: #888; background: #f0f0f0; }
+        .hdr-btn.on {
+            border-color: #6a8fc4;
+            background: #eef4ff;
+            font-weight: 600;
+        }
 
         hr { border: none; border-top: 1px solid #ddd; margin: 10px 0; }
 
@@ -121,45 +145,9 @@
             font-size: 11px;
         }
 
-        #statusLine {
-            font-family: monospace;
-            font-size: 11px;
-            color: #666;
-            flex: 1;
-            min-width: 0;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        /* results */
-        #resultsBox {
-            font-size: 12px;
-            border: 1px solid #ddd;
-            padding: 6px 8px;
-            margin-bottom: 8px;
-            min-height: 32px;
-        }
-        #resultsBox.found-confirmed   { border-color: #2a9a2a; background: #f2fff2; }
-        #resultsBox.found-unconfirmed { border-color: #b8860b; background: #fffbe6; }
-        #resultsBox.none { border-color: #bbb; background: #fafafa; }
-        .res-summary { font-family: monospace; font-size: 12px; color: #555; margin-bottom: 4px; }
-        .res-item {
-            display: flex; align-items: baseline; gap: 6px;
-            padding: 3px 0; border-bottom: 1px solid #f0f0f0;
-            flex-wrap: wrap;
-        }
-        .res-item:last-child { border-bottom: none; }
-        .res-type  { font-size: 10px; color: #888; white-space: nowrap; font-family: monospace; }
-        .res-addr  { font-family: monospace; font-size: 11px; color: #1a7a1a; font-weight: 700; flex: 1; min-width: 0; word-break: break-all; }
+        /* single-spin address table */
         .res-link  { font-size: 11px; color: #888; text-decoration: none; flex-shrink: 0; }
         .res-link:hover { color: #333; text-decoration: underline; }
-        .res-toggle { font-size: 11px; color: #888; cursor: pointer; font-family: monospace; }
-        .res-toggle:hover { color: #333; text-decoration: underline; }
-        .res-server { font-size: 10px; font-family: monospace; white-space: nowrap; }
-        .res-server.confirmed { color: #1a7a1a; }
-        .res-server.unconfirmed { color: #b8860b; }
-        .res-server.error { color: #c33; }
 
         #singleSpinBox {
             font-size: 12px;
@@ -169,8 +157,8 @@
             background: #fafafa;
             display: none;
         }
-        .ss-head { font-family: monospace; color: #555; margin-bottom: 4px; }
-        .ss-words { font-family: monospace; color: #444; margin-bottom: 6px; word-break: break-word; }
+        .ss-summary { font-family: monospace; font-size: 11px; color: #555; margin-bottom: 6px; line-height: 1.45; }
+        .ss-head { font-family: monospace; color: #555; margin-bottom: 6px; }
         .ss-row { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid #f0f0f0; padding: 2px 0; }
         .ss-row:last-child { border-bottom: none; }
         .ss-tag { font-family: monospace; font-size: 10px; color: #888; min-width: 76px; }
@@ -178,6 +166,9 @@
         .ss-money { font-family: monospace; font-size: 10px; white-space: nowrap; }
         .ss-money.yes { color: #1a7a1a; font-weight: 700; }
         .ss-money.no { color: #888; }
+        .ss-srv { font-size: 10px; font-family: monospace; white-space: nowrap; color: #666; }
+        .ss-mp { font-size: 10px; color: #888; text-decoration: none; white-space: nowrap; }
+        .ss-mp:hover { color: #333; text-decoration: underline; }
 
         /* filter */
         .filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -229,7 +220,6 @@
         #eduStatsTop { margin-bottom: 4px; line-height: 1.55; }
         #eduStatsAuto { margin-bottom: 4px; color: #666; line-height: 1.45; }
         #eduStatsAuto .stat-sep { color: #ccc; margin: 0 4px; }
-        #eduStatsAuto .stat-match { color: #1a7a1a; }
         #eduProgressWrap { margin-top: 4px; }
         #eduProgressBar { height: 8px; background: #eee; border: 1px solid #ddd; border-radius: 3px; overflow: hidden; }
         #eduProgressFill { height: 100%; width: 0%; background: #2f8f4e; transition: width .2s linear; }
@@ -276,8 +266,14 @@
 <body>
 
 <div class="hdr">
-    <h1>BTC Slot Machine</h1>
-    <a href="test.html">Filter Test &#8599;</a>
+    <div class="hdr-left">
+        <h1>BTC Slot Machine</h1>
+        <a href="test.html">Address Check &#8599;</a>
+    </div>
+    <div class="hdr-right">
+        <button type="button" class="hdr-btn" id="btnFundedTest" title="11× abandon + about — known funded test mnemonic, checks server directly">test</button>
+        <button type="button" class="hdr-btn" id="btnDebugToggle" title="Log, filter controls, extended autospin results" aria-pressed="false">debug</button>
+    </div>
 </div>
 
 <!-- Slot grid -->
@@ -289,7 +285,6 @@
     <button type="button" id="btnSpin" onclick="doSpin()">SPIN</button>
     <label class="auto-label"><input type="checkbox" id="chkAuto" onchange="onAutoChange()"> auto</label>
     <button id="btnCopy" onclick="copyWords()">copy</button>
-    <span id="statusLine">No filter loaded — load one below or spin to auto-download the 512M filter.</span>
 </div>
 <div class="scan-row">
     <span>Paths:</span>
@@ -311,7 +306,6 @@
 </div>
 
 <div id="noFilterBanner">No filter loaded. Spinning will auto-download the 512M filter (~512 MB). Server confirmations always use 16G.</div>
-<div id="resultsBox" style="display:none"></div>
 <div id="singleSpinBox"></div>
 
 <div class="filter-row" id="filterRow">
@@ -342,14 +336,29 @@
     <div class="hits-hdr">
         <span class="hits-lbl">Recent Hits</span>
         <button class="hits-clr" onclick="clearHits()">clear</button>
-        <a href="#" onclick="event.preventDefault();doSpin(Array(11).fill('abandon').concat(['about']),{serverOnly:true})" class="hits-clr" title="11× abandon + about — known funded test mnemonic, checks server directly">test</a>
     </div>
     <div id="hitsList"></div>
 </div>
 
 <script>
 'use strict';
-const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
+const DEBUG_STORAGE_KEY = 'btc_slot_debug_v1';
+let debugMode = localStorage.getItem(DEBUG_STORAGE_KEY) === '1';
+
+function syncDebugToggleUi() {
+    const btn = document.getElementById('btnDebugToggle');
+    if (btn) {
+        btn.classList.toggle('on', debugMode);
+        btn.setAttribute('aria-pressed', debugMode ? 'true' : 'false');
+    }
+}
+
+function setDebugMode(on) {
+    debugMode = !!on;
+    localStorage.setItem(DEBUG_STORAGE_KEY, debugMode ? '1' : '0');
+    syncDebugToggleUi();
+    updateDebugUiVisibility();
+}
 
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -366,7 +375,7 @@ function hexToBytes(h) { return new Uint8Array(h.match(/.{2}/g).map(x=>parseInt(
 // ── LOG ───────────────────────────────────────────────────────────────────────
 const LOG_START = performance.now();
 function log(msg, type) {
-    if (!DEBUG_MODE) return;
+    if (!debugMode) return;
     type = type || '';
     const t = ((performance.now()-LOG_START)/1000).toFixed(2);
     const el = document.getElementById('logConsole');
@@ -497,7 +506,7 @@ async function refreshIDBState() {
     });
     const delRow  = document.getElementById('idbRow');
     const delList = document.getElementById('idbDelList');
-    if (!keys.length || !DEBUG_MODE) { delRow.style.display = 'none'; return; }
+    if (!keys.length || !debugMode) { delRow.style.display = 'none'; return; }
     delRow.style.display = '';
     delList.innerHTML = '';
     const labels = { 512:'512M' };
@@ -522,14 +531,12 @@ function updateDebugUiVisibility() {
     const logBox = document.getElementById('logConsole');
     const filterRow = document.getElementById('filterRow');
     const idbRow = document.getElementById('idbRow');
-    const resultsBox = document.getElementById('resultsBox');
 
-    if (!DEBUG_MODE) {
+    if (!debugMode) {
         if (logHdr) logHdr.style.display = 'none';
         if (logBox) logBox.style.display = 'none';
         if (filterRow) filterRow.style.display = cf.view ? 'none' : '';
         if (idbRow && cf.view) idbRow.style.display = 'none';
-        if (resultsBox) resultsBox.style.display = 'none';
         return;
     }
 
@@ -989,10 +996,17 @@ function buildGrid() {
 
 function setSlotWord(idx, word) {
     const slot = document.getElementById('slot' + idx);
+    if (!slot) return;
+    const wEl = slot.querySelector('.slot-word');
+    if (!wEl) return;
+    if (slotLocks[idx] === true) {
+        if (wEl.textContent !== word) wEl.textContent = word;
+        return;
+    }
     slot.classList.remove('flash');
     void slot.offsetWidth; // reflow to restart animation
     slot.classList.add('flash');
-    slot.querySelector('.slot-word').textContent = word;
+    wEl.textContent = word;
 }
 
 function renderCurrentWordsToSlots() {
@@ -1046,6 +1060,7 @@ let lastFlushTime = Date.now();
 
 async function flushPendingHits() {
     if (pendingHits.length === 0) return;
+    clearSqliteKeyCache();
     const batch = pendingHits.splice(0);
     lastFlushTime = Date.now();
 
@@ -1094,7 +1109,7 @@ async function flushPendingHits() {
                 if (savedHasUtxo && autoSpinning) {
                     autoSpinning = false;
                     document.getElementById('chkAuto').checked = false;
-                    document.getElementById('statusLine').textContent = 'Stopped: funded match found: ' + groups[i].words.join(' ');
+                    log('Stopped: funded match found: ' + groups[i].words.join(' '), 'ok');
                 }
                 spinsAtLastMatch = totalSpins;
                 lastMatchTime = Date.now();
@@ -1115,68 +1130,53 @@ function normalizeKey32Hex(filterKey) {
     return '';
 }
 
-async function enrichHistoryCandidatesWithSqlite(items) {
-    const tasks = items.map(async function(item, idx) {
-        const key32 = normalizeKey32Hex(item.filterKey || '');
-        const out = Object.assign({}, item, { sqliteCount: 0, sqliteTotalSat: 0, sqliteHasUtxo: false });
-        if (!key32) return out;
-        try {
-            const resp = await fetch('balance_lookup.php?key32=' + key32 + '&limit=1&_cb=' + Date.now() + '_' + idx);
-            if (!resp.ok) return out;
-            const data = await resp.json();
-            if (!data || data.ok !== true) return out;
-            const c = Number(data.count || 0);
-            const sat = Number(data.total_sat || 0);
-            out.sqliteCount = c;
-            out.sqliteTotalSat = sat;
-            out.sqliteHasUtxo = c > 0;
-            return out;
-        } catch (_) {
-            return out;
-        }
-    });
-    return await Promise.all(tasks);
+function fmtSatBtc(sat) {
+    return (Number(sat) / 1e8).toFixed(8) + '\xa0BTC';
 }
 
-async function checkBalancesIn(btn, container) {
-    btn.disabled = true;
-    btn.textContent = '\u2026';
-    const btc = function(sat) { return (sat / 1e8).toFixed(8) + '\xa0BTC'; };
-    const rows = container.querySelectorAll('.res-item, .hits-entry-addr');
-    for (let i = 0; i < rows.length; i++) {
-        const addrEl = rows[i].querySelector('.res-addr') || rows[i].querySelector('span');
-        const balEl  = rows[i].querySelector('.res-bal');
-        if (!addrEl || !balEl) continue;
-        // extract address: res-addr has just the address; hits-entry-addr span has "type addr ✓srv"
-        const addrText = (addrEl.className === 'res-addr')
-            ? addrEl.textContent.trim()
-            : addrEl.textContent.trim().split(/\s+/)[1];
-        if (!addrText) continue;
-        const key32 = normalizeKey32Hex(rows[i].dataset.key32 || '');
-        balEl.textContent = '\u2026';
-        try {
-            if (!key32) {
-                balEl.style.color = '#888';
-                balEl.textContent = 'no key32 (old entry)';
-                continue;
-            }
-            const resp = await fetch('balance_lookup.php?key32=' + key32 + '&limit=1&_cb=' + Date.now());
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            const data = await resp.json();
-            if (!data || data.ok !== true) throw new Error((data && data.error) ? data.error : 'lookup failed');
-            const totalSat = Number(data.total_sat || 0);
-            const rowsCount = Number(data.count || 0);
-            balEl.style.color = rowsCount > 0 ? '#1a7a1a' : '#888';
-            balEl.textContent = rowsCount > 0
-                ? ('utxo\xa0' + rowsCount + '\xa0·\xa0bal\xa0' + btc(totalSat))
-                : 'no utxo';
-        } catch(e) {
-            balEl.style.color   = '#c00';
-            balEl.textContent   = e.message;
+// Per-spin cache so saveHitToHistory + manual UI share one HTTP round-trip per key32.
+let sqliteKeyCache = {};
+function clearSqliteKeyCache() { sqliteKeyCache = {}; }
+
+async function enrichHistoryCandidatesWithSqlite(items) {
+    if (!items || !items.length) return items || [];
+    const uniqueKeys = [];
+    const seen = {};
+    for (let i = 0; i < items.length; i++) {
+        const k = normalizeKey32Hex(items[i].filterKey || '');
+        if (!k || seen[k]) continue;
+        seen[k] = true;
+        if (sqliteKeyCache[k] === undefined) uniqueKeys.push(k);
+    }
+    await Promise.all(uniqueKeys.map(function(k, idx) {
+        return fetch('balance_lookup.php?key32=' + encodeURIComponent(k) + '&limit=1&_cb=' + Date.now() + '_' + idx)
+            .then(function(resp) { return resp.ok ? resp.json() : null; })
+            .then(function(data) {
+                if (!data || data.ok !== true) {
+                    sqliteKeyCache[k] = { sqliteCount: 0, sqliteTotalSat: 0, sqliteHasUtxo: false };
+                    return;
+                }
+                const c = Number(data.count || 0);
+                const sat = Number(data.total_sat || 0);
+                sqliteKeyCache[k] = { sqliteCount: c, sqliteTotalSat: sat, sqliteHasUtxo: c > 0 };
+            })
+            .catch(function() {
+                sqliteKeyCache[k] = { sqliteCount: 0, sqliteTotalSat: 0, sqliteHasUtxo: false };
+            });
+    }));
+    for (let i = 0; i < items.length; i++) {
+        const k = normalizeKey32Hex(items[i].filterKey || '');
+        items[i].sqliteCount = 0;
+        items[i].sqliteTotalSat = 0;
+        items[i].sqliteHasUtxo = false;
+        if (k && sqliteKeyCache[k]) {
+            const s = sqliteKeyCache[k];
+            items[i].sqliteCount = s.sqliteCount;
+            items[i].sqliteTotalSat = s.sqliteTotalSat;
+            items[i].sqliteHasUtxo = s.sqliteHasUtxo;
         }
     }
-    btn.textContent = 'bal';
-    btn.disabled = false;
+    return items;
 }
 
 function powBigInt(base, exp) {
@@ -1228,23 +1228,42 @@ function isCurrentStateExhausted() {
     return checkedInState >= totalComb;
 }
 
-function renderSingleSpinResults(words, rows) {
+function renderSingleSpinResults(words, rows, opts) {
+    opts = opts || {};
     const box = document.getElementById('singleSpinBox');
     if (!box) return;
     if (!rows || !rows.length) { box.style.display = 'none'; return; }
-    const moneyCount = rows.filter(function(r) { return r.money === 'yes'; }).length;
-    let html = '<div class="ss-head">Generated ' + rows.length + ' addresses · with money: ' + moneyCount + '</div>';
-    html += '<div class="ss-words">' + esc(words.join(' ')) + '</div>';
+    let html = '';
+    if (opts.summary) html += '<div class="ss-summary">' + esc(opts.summary) + '</div>';
+    html += '<div class="ss-head">' + rows.length + ' addresses</div>';
     for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
+        const sqliteTxt = typeof r.sqliteHasUtxo === 'boolean'
+            ? (r.sqliteHasUtxo === true
+                ? ('sqlite utxo\xa0' + Number(r.sqliteCount || 0) + '\xa0·\xa0' + fmtSatBtc(r.sqliteTotalSat || 0))
+                : 'sqlite: no utxo')
+            : '';
+        const sqliteColor = typeof r.sqliteHasUtxo === 'boolean' ? (r.sqliteHasUtxo === true ? '#1a7a1a' : '#888') : '#888';
+        let srvTxt = '';
+        if (r.serverFound === true) srvTxt = 'srv \u2713';
+        else if (r.serverFound === false) srvTxt = 'srv \u2717';
+        let balTxt = '';
+        if (r.serverFound === true) {
+            if (r.balFound === true) balTxt = 'bal \u2713';
+            else if (r.balFound === false) balTxt = 'bal \u2717';
+        }
         html += '<div class="ss-row">'
             + '<span class="ss-tag">' + esc(r.type) + '[' + r.index + ']</span>'
             + '<span class="ss-addr">' + esc(r.addr) + '</span>'
-            + '<span class="ss-money ' + (r.money === 'yes' ? 'yes' : 'no') + '">' + (r.money === 'yes' ? 'money' : 'no money') + '</span>'
+            + '<span class="ss-srv">' + esc(srvTxt) + '</span>'
+            + '<span class="ss-srv">' + esc(balTxt) + '</span>'
+            + '<span class="ss-money ' + (r.money === 'yes' ? 'yes' : 'no') + '">' + (r.money === 'yes' ? 'local' : 'no local') + '</span>'
+            + '<span class="ss-sqlite" style="font-size:10px;font-family:monospace;white-space:nowrap;color:' + sqliteColor + '">' + esc(sqliteTxt) + '</span>'
+            + '<a class="ss-mp" href="https://mempool.space/address/' + encodeURIComponent(r.addr) + '" target="_blank" rel="noopener">mempool&#8599;</a>'
             + '</div>';
     }
     box.innerHTML = html;
-    box.style.display = '';
+    box.style.display = 'block';
 }
 
 function buildSpinWords(fixedWords) {
@@ -1287,17 +1306,6 @@ function updateAutoStats() {
         + '<span class="stat-sep">·</span>' + totalAddresses.toLocaleString() + ' addr'
         + '<span class="stat-sep">·</span>' + apsAll + '/s';
 
-    if (lastMatchTime !== null) {
-        const sinceMatchSec   = (now - lastMatchTime) / 1000;
-        const sinceMatchSpins = totalSpins - spinsAtLastMatch;
-        const spsMatch        = sinceMatchSec > 0 ? (sinceMatchSpins / sinceMatchSec).toFixed(2) : '0.00';
-        html += '<span class="stat-sep"> · </span>'
-            + '<span class="stat-match">since last match: '
-            + sinceMatchSpins.toLocaleString() + ' spins'
-            + '<span class="stat-sep"> · </span>' + spsMatch + '/s'
-            + '</span>';
-    }
-
     const eduAuto = document.getElementById('eduStatsAuto');
     if (eduAuto) eduAuto.innerHTML = html;
 
@@ -1317,9 +1325,7 @@ function updateAutoStats() {
     const fill = document.getElementById('eduProgressFill');
 
     document.getElementById('eduStatsTop').innerHTML =
-        'Locked: ' + locked + ' / 12'
-        + ' <span class="stat-sep">·</span> Mode: ' + (free < 6 ? 'exhaustive' : 'random')
-        + ' <span class="stat-sep">·</span> Speed: ' + spsAll + '/s'
+        'Speed: ' + spsAll + '/s'
         + ' <span class="stat-sep">·</span> Space: ' + formatBigIntShort(totalComb)
         + ' <span class="stat-sep">·</span> Tried: ' + formatBigIntShort(checkedInState)
         + ' <span class="stat-sep">·</span> ETA: ' + eta;
@@ -1328,7 +1334,7 @@ function updateAutoStats() {
         if (widthPct > 0 && widthPct < 1) fill.style.minWidth = '2px';
         else fill.style.minWidth = '0';
     }
-    document.getElementById('eduProgressText').textContent = 'Attempt progress: ' + progressPct + ' (' + free + ' free slots)';
+    document.getElementById('eduProgressText').textContent = 'Progress: ' + progressPct;
 }
 
 function setAutoSpin(val) {
@@ -1358,13 +1364,13 @@ async function onAutoChange() {
         if (lastSpinHadFundedMatch) {
             autoSpinning = false;
             document.getElementById('chkAuto').checked = false;
-            document.getElementById('statusLine').textContent = 'Stopped: funded match found' + (lastSpinFundedWords ? ': ' + lastSpinFundedWords : '.');
+            log('Stopped: funded match found' + (lastSpinFundedWords ? ': ' + lastSpinFundedWords : '.'), 'ok');
             break;
         }
         if (lastSpinExhaustiveDone) {
             autoSpinning = false;
             document.getElementById('chkAuto').checked = false;
-            document.getElementById('statusLine').textContent = 'Stopped: exhaustive search completed for current lock state.';
+            log('Stopped: exhaustive search completed for current lock state.', 'dim');
             break;
         }
         if (pendingHits.length >= FLUSH_BATCH_SIZE ||
@@ -1373,7 +1379,6 @@ async function onAutoChange() {
         }
     }
     await flushPendingHits();
-    document.getElementById('resultsBox').style.display = DEBUG_MODE ? 'block' : 'none';
     document.getElementById('btnCopy').style.display = '';
     setSpinBtnAfterSpin(document.getElementById('btnSpin'));
 }
@@ -1420,6 +1425,7 @@ async function doSpin(fixedWords, opts) {
     }
 }
 async function _doSpin(fixedWords, opts) {
+    clearSqliteKeyCache();
     lastSpinHadFundedMatch = false;
     lastSpinExhaustiveDone = false;
     lastSpinFundedWords = '';
@@ -1428,10 +1434,9 @@ async function _doSpin(fixedWords, opts) {
     const btn = document.getElementById('btnSpin');
     btn.disabled = true;
     if (!isAuto) document.getElementById('logConsole').innerHTML = '';
-    document.getElementById('resultsBox').style.display = 'none';
     document.getElementById('btnCopy').style.display = 'none';
     const singleSpinBox = document.getElementById('singleSpinBox');
-    if (isAuto && singleSpinBox) singleSpinBox.style.display = 'none';
+    if (singleSpinBox) singleSpinBox.style.display = 'none';
 
     // 1. Generate (or restore) mnemonic
     const spinPlan = buildSpinWords(fixedWords);
@@ -1445,7 +1450,6 @@ async function _doSpin(fixedWords, opts) {
     // 3. Display in slots with animation
     for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
 
-    document.getElementById('statusLine').textContent = words.join(' ');
     if (!isAuto) log((spinPlan.exhaustive ? '[exhaustive] ' : '') + 'mnemonic: ' + words.join(' '), 'hi');
 
     // 4. Derive seed (PBKDF2-HMAC-SHA512, 2048 iterations)
@@ -1457,20 +1461,22 @@ async function _doSpin(fixedWords, opts) {
     const scanCfg = getScanConfig();
     const pathDefs = scanCfg.enabledPaths;
     const perPathCount = scanCfg.perPathCount;
-        if (pathDefs.length === 0) {
-        document.getElementById('statusLine').textContent = 'Select at least one derivation path.';
+    if (pathDefs.length === 0) {
         if (!isAuto) log('no derivation path selected', 'err');
         if (isAuto) setAutoSpin(false);
-        if (!isAuto) renderSingleSpinResults(words, []);
+        if (!isAuto) {
+            document.getElementById('btnCopy').style.display = '';
+            renderSingleSpinResults(words, []);
+        }
         return false;
     }
 
     const found = [];
     const collectDerived = !isAuto;
     const derivedRows = collectDerived ? [] : null;
-    function trackDerived(type, idx, addr) {
+    function trackDerived(type, idx, addr, filterKey) {
         if (!collectDerived) return null;
-        const row = { type: type, index: idx, addr: addr, money: 'no' };
+        const row = { type: type, index: idx, addr: addr, filterKey: filterKey || '', money: 'no' };
         derivedRows.push(row);
         return row;
     }
@@ -1487,7 +1493,7 @@ async function _doSpin(fixedWords, opts) {
             for (let n = 0; n < perPathCount; n++) {
                 const child = await childKey(acct, n, false);
                 const {addr, h160, filterKey} = fn(child.key);
-                const rowRef = trackDerived(type, n, addr);
+                const rowRef = trackDerived(type, n, addr, filterKey);
                 checked++;
                 found.push({type, addr, h160, filterKey, serverFound: null, rowRef});
             }
@@ -1509,6 +1515,20 @@ async function _doSpin(fixedWords, opts) {
                 for (let i = 0; i < hits.length; i++) if (hits[i].rowRef) hits[i].rowRef.money = hits[i].balFound === true ? 'yes' : 'no';
                 if (!isAuto) log('balance filter: ' + balHits + '/' + hits.length + ' have unspent BTC', balHits ? 'ok' : 'data');
             }
+            if (!isAuto && derivedRows && derivedRows.length) {
+                const map = {};
+                for (let i = 0; i < found.length; i++) {
+                    const k = normalizeKey32Hex(found[i].filterKey || '');
+                    if (k) map[k] = found[i];
+                }
+                for (let j = 0; j < derivedRows.length; j++) {
+                    const k = normalizeKey32Hex(derivedRows[j].filterKey || '');
+                    if (k && map[k]) {
+                        derivedRows[j].serverFound = map[k].serverFound;
+                        derivedRows[j].balFound = map[k].balFound;
+                    }
+                }
+            }
             // keep only server hits in found for display
             found.splice(0, found.length, ...hits);
             if (hits.length > 0) {
@@ -1520,79 +1540,26 @@ async function _doSpin(fixedWords, opts) {
             }
         } catch(e) { log('server error: ' + e.message, 'err'); }
     } else if (cf.view) {
-        // Phase 1: check first few entries of first selected path — bail early if no hit
-        const acct0 = await derivePath(seed, pathDefs[0].path);
-        const phase1Count = Math.min(5, perPathCount);
-        for (let n = 0; n < phase1Count; n++) {
-            const child = await childKey(acct0, n, false);
-            const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
-            const rowRef = trackDerived(pathDefs[0].type, n, addr);
-            checked++;
-            const res = clientLookup(filterKey);
-            if (res && res.found) {
-                found.push({type: pathDefs[0].type, addr, h160, filterKey, serverFound: null, rowRef});
-                if (!isAuto) log('HIT ' + pathDefs[0].type + ' [0/' + n + '] ' + addr, 'ok');
-            }
-        }
-
-        if (found.length === 0) {
-            if (!isAuto) log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 no match', 'data');
-            registerSpinForCurrentState();
-            totalAddresses += checked;
-            lastSpinExhaustiveDone = isCurrentStateExhausted();
-            updateAutoStats();
-            if (!isAuto) renderSingleSpinResults(words, derivedRows);
-            return false;
-        }
-
-        // Manual: quick server check on phase 1 hits — bail if not confirmed
         if (!isAuto) {
-            try {
-                const t0s = performance.now();
-                const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.filterKey); })) });
-                const buf  = new Uint32Array(await resp.arrayBuffer());
-                serverFilterLabel = '16G';
-                for (let i = 0; i < found.length; i++) {
-                    found[i].serverFound = readBit(buf, i) === 1;
-                    if (found[i].rowRef && found[i].serverFound !== true) found[i].rowRef.money = 'no';
-                }
-                log('quick server check \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', 'dim');
-            } catch(e) { log('server error: ' + e.message, 'err'); }
-            if (!found.some(function(f) { return f.serverFound === true; })) {
-                log('false positive \xb7 skipping remaining selected addresses', 'dim');
-                registerSpinForCurrentState();
-                totalAddresses += checked;
-                updateAutoStats();
-                // fall through to show resultsBox with the unconfirmed hit
-            } else {
-                // Phase 2: check remainder of selected paths
-                for (let n = phase1Count; n < perPathCount; n++) {
-                    const child = await childKey(acct0, n, false);
-                    const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
-                    const rowRef = trackDerived(pathDefs[0].type, n, addr);
+            // Manual: derive every selected path × every index (e.g. 4 paths × 5 = 20 addresses)
+            for (let pi = 0; pi < pathDefs.length; pi++) {
+                const {path, type, fn} = pathDefs[pi];
+                const acct = await derivePath(seed, path);
+                for (let n = 0; n < perPathCount; n++) {
+                    const child = await childKey(acct, n, false);
+                    const {addr, h160, filterKey} = fn(child.key);
+                    const rowRef = trackDerived(type, n, addr, filterKey);
                     checked++;
                     const res = clientLookup(filterKey);
                     if (res && res.found) {
-                        found.push({type: pathDefs[0].type, addr, h160, filterKey, serverFound: null, rowRef});
-                        log('HIT ' + pathDefs[0].type + ' [0/' + n + '] ' + addr, 'ok');
+                        found.push({type, addr, h160, filterKey, serverFound: null, rowRef});
+                        log('HIT ' + type + ' [' + pi + '/' + n + '] ' + addr, 'ok');
                     }
                 }
-                for (let pi = 1; pi < pathDefs.length; pi++) {
-                    const {path, type, fn} = pathDefs[pi];
-                    const acct = await derivePath(seed, path);
-                    for (let n = 0; n < perPathCount; n++) {
-                        const child = await childKey(acct, n, false);
-                        const {addr, h160, filterKey} = fn(child.key);
-                        const rowRef = trackDerived(type, n, addr);
-                        checked++;
-                        const res = clientLookup(filterKey);
-                        if (res && res.found) {
-                            found.push({type, addr, h160, filterKey, serverFound: null, rowRef});
-                            log('HIT ' + type + ' [' + pi + '/' + n + '] ' + addr, 'ok');
-                        }
-                    }
-                }
-                // Server check all found (phase 1 already checked, re-verify together)
+            }
+            log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 local hits ' + found.length, found.length ? 'ok' : 'data');
+
+            if (found.length > 0) {
                 try {
                     const t0s = performance.now();
                     const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.filterKey); })) });
@@ -1601,13 +1568,13 @@ async function _doSpin(fixedWords, opts) {
                     for (let i = 0; i < found.length; i++) {
                         found[i].serverFound = readBit(buf, i) === 1;
                         if (found[i].rowRef && found[i].serverFound !== true) found[i].rowRef.money = 'no';
-                        log('server ' + (found[i].serverFound ? 'CONFIRMED \u2713' : 'not confirmed') + ' ' + found[i].addr,
-                            found[i].serverFound ? 'ok' : 'dim');
                     }
-                    log('server checked ' + found.length + ' \xb7 16G \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', 'dim');
+                    log('server check \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', 'dim');
                 } catch(e) { log('server error: ' + e.message, 'err'); }
-                const confirmed = found.filter(function(f) { return f.serverFound === true; });
-                if (confirmed.length > 0) {
+                if (!found.some(function(f) { return f.serverFound === true; })) {
+                    log('false positive \xb7 server did not confirm local hits', 'dim');
+                } else {
+                    const confirmed = found.filter(function(f) { return f.serverFound === true; });
                     await checkBalanceFilter(confirmed);
                     const balHits = confirmed.filter(function(f) { return f.balFound; }).length;
                     for (let i = 0; i < confirmed.length; i++) if (confirmed[i].rowRef) confirmed[i].rowRef.money = confirmed[i].balFound === true ? 'yes' : 'no';
@@ -1620,7 +1587,28 @@ async function _doSpin(fixedWords, opts) {
                 }
             }
         } else {
-            // Autospin: phase 1 local hit → check remainder, push all to pendingHits
+            // Autospin: phase 1 quick check on first path only, then expand if any local hit
+            const acct0 = await derivePath(seed, pathDefs[0].path);
+            const phase1Count = Math.min(5, perPathCount);
+            for (let n = 0; n < phase1Count; n++) {
+                const child = await childKey(acct0, n, false);
+                const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
+                checked++;
+                const res = clientLookup(filterKey);
+                if (res && res.found) {
+                    found.push({type: pathDefs[0].type, addr, h160, filterKey, serverFound: null});
+                }
+            }
+
+            if (found.length === 0) {
+                log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 no match', 'data');
+                registerSpinForCurrentState();
+                totalAddresses += checked;
+                lastSpinExhaustiveDone = isCurrentStateExhausted();
+                updateAutoStats();
+                return false;
+            }
+
             for (let n = phase1Count; n < perPathCount; n++) {
                 const child = await childKey(acct0, n, false);
                 const {addr, h160, filterKey} = pathDefs[0].fn(child.key);
@@ -1642,10 +1630,7 @@ async function _doSpin(fixedWords, opts) {
             for (let i = 0; i < found.length; i++)
                 pendingHits.push({ words: words, type: found[i].type, addr: found[i].addr, h160: found[i].h160, filterKey: found[i].filterKey });
         }
-
-        if (!isAuto) log('checked ' + checked + ' \xb7 filter ' + cf.sizeMB + 'MB \xb7 found ' + found.length, found.length ? 'ok' : 'data');
     } else {
-        document.getElementById('statusLine').textContent = 'Downloading 512M filter\u2026';
         if (!isAuto) log('no filter loaded \u2014 auto-downloading 512M filter\u2026', 'dim');
         await filterClick(512, 32);
         if (cf.view) {
@@ -1657,75 +1642,43 @@ async function _doSpin(fixedWords, opts) {
 
     if (!isAuto) log('address derivation: ' + ((performance.now()-tAddr)/1000).toFixed(2) + 's', 'dim');
 
-    // 7. Show results
-    const box = document.getElementById('resultsBox');
-    if (DEBUG_MODE && !isAuto) box.style.display = 'block';
-    if (!DEBUG_MODE) box.style.display = 'none';
+    // SQLite UTXO snapshot (manual spin): every derived address + every hit row
+    if (!isAuto) {
+        if (derivedRows && derivedRows.length) await enrichHistoryCandidatesWithSqlite(derivedRows);
+        if (found.length) await enrichHistoryCandidatesWithSqlite(found);
+    }
+
     const anyConfirmed = found.some(function(f) { return f.serverFound === true; });
-    if (DEBUG_MODE) box.className = found.length === 0 ? 'none' : anyConfirmed ? 'found-confirmed' : 'found-unconfirmed';
 
-    const localLabel = cf.sizeMB ? fmtFilterMB(cf.sizeMB) : '?';
-    const serverConfirmedCount = found.filter(function(f) { return f.serverFound === true; }).length;
-    const balConfirmedCount    = found.filter(function(f) { return f.balFound === true; }).length;
-    let summary = 'Checked ' + checked;
-    if (found.length > 0) {
-        summary += ' &middot; Local (' + localLabel + '): ' + found.length;
-        if (serverFilterLabel !== null) {
-            summary += ' &middot; Server (' + serverFilterLabel + '): ' + serverConfirmedCount;
-            if (serverConfirmedCount > 0) summary += ' &middot; Has BTC: ' + balConfirmedCount;
+    if (!isAuto) {
+        if (derivedRows && derivedRows.length && found.length) {
+            const byKey = {};
+            for (let fi = 0; fi < found.length; fi++) {
+                const k = normalizeKey32Hex(found[fi].filterKey || '');
+                if (k) byKey[k] = found[fi];
+            }
+            for (let di = 0; di < derivedRows.length; di++) {
+                const k = normalizeKey32Hex(derivedRows[di].filterKey || '');
+                if (k && byKey[k]) {
+                    const f = byKey[k];
+                    derivedRows[di].serverFound = f.serverFound;
+                    derivedRows[di].balFound = f.balFound;
+                }
+            }
         }
+        const localLabel = cf.sizeMB ? fmtFilterMB(cf.sizeMB) : '?';
+        const serverConfirmedCount = found.filter(function(f) { return f.serverFound === true; }).length;
+        const expectedAddr = pathDefs.length * perPathCount;
+        let summaryLine = 'Checked ' + checked + ' (expected ' + expectedAddr + ' addresses)';
+        summaryLine += ' · Local (' + localLabel + '): ' + found.length;
+        if (serverFilterLabel !== null) {
+            summaryLine += ' · Server (' + serverFilterLabel + '): ' + serverConfirmedCount;
+        }
+        document.getElementById('btnCopy').style.display = '';
+        renderSingleSpinResults(words, derivedRows, { summary: summaryLine });
     } else {
-        summary += ' &middot; Found: 0';
+        document.getElementById('btnCopy').style.display = 'none';
     }
-    function resItemHtml(f) {
-        const srvHtml = f.serverFound === true
-            ? '<span class="res-server confirmed">\u2713 server</span>'
-            : f.serverFound === false
-            ? '<span class="res-server unconfirmed">server: not found</span>'
-            : '';
-        const balHtml = f.serverFound === true
-            ? (f.balFound === true
-                ? '<span class="res-server confirmed">\u2713 has BTC</span>'
-                : f.balFound === false
-                ? '<span class="res-server unconfirmed">no balance</span>'
-                : '')
-            : '';
-        return '<div class="res-item" data-key32="' + esc(normalizeKey32Hex(f.filterKey || '')) + '">'
-            + '<span class="res-type">' + esc(f.type) + '</span>'
-            + '<span class="res-addr">' + esc(f.addr) + '</span>'
-            + srvHtml
-            + balHtml
-            + '<span class="res-bal" style="font-size:11px;font-family:monospace;white-space:nowrap;flex:1"></span>'
-            + '<a class="res-link" href="https://mempool.space/address/' + encodeURIComponent(f.addr) + '" target="_blank">mempool&#8599;</a>'
-            + '</div>';
-    }
-
-    const confirmed = found.filter(function(f) { return f.serverFound === true; });
-    const localOnly = found.filter(function(f) { return f.serverFound !== true; });
-
-    let html = '<div class="res-summary" style="display:flex;align-items:baseline">'
-        + '<span>' + summary + '</span>'
-        + '</div>';
-    for (let i = 0; i < confirmed.length; i++) html += resItemHtml(confirmed[i]);
-
-    if (localOnly.length > 0) {
-        const localId = 'localMatches_' + Date.now();
-        html += '<div style="margin-top:4px">'
-            + '<span class="res-toggle" onclick="var el=document.getElementById(\'' + localId + '\');var t=document.getElementById(\'' + localId + '_t\');if(el.style.display===\'none\'){el.style.display=\'\';t.textContent=\'Hide local matches\';}else{el.style.display=\'none\';t.textContent=\'Show ' + localOnly.length + ' local-only match' + (localOnly.length > 1 ? 'es' : '') + '\';}"> '
-            + '<span id="' + localId + '_t">Show ' + localOnly.length + ' local-only match' + (localOnly.length > 1 ? 'es' : '') + '</span>'
-            + '</span></div>';
-        html += '<div id="' + localId + '" style="display:none">';
-        for (let i = 0; i < localOnly.length; i++) html += resItemHtml(localOnly[i]);
-        html += '</div>';
-    }
-
-    if (DEBUG_MODE) box.innerHTML = html;
-
-    document.getElementById('statusLine').textContent =
-        'Checked ' + checked + ' \xb7 Found: ' + found.length + (found.length ? ' \u2014 see results below' : '');
-
-    if (!isAuto) document.getElementById('btnCopy').style.display = '';
-    if (!isAuto) renderSingleSpinResults(words, derivedRows);
     registerSpinForCurrentState();
     totalAddresses += checked;
     lastSpinExhaustiveDone = isCurrentStateExhausted();
@@ -1740,6 +1693,13 @@ window.addEventListener('DOMContentLoaded', async function() {
     loadScanSettings();
     renderCurrentWordsToSlots();
     renderAllSlotLocks();
+    syncDebugToggleUi();
+    document.getElementById('btnDebugToggle').addEventListener('click', function() {
+        setDebugMode(!debugMode);
+    });
+    document.getElementById('btnFundedTest').addEventListener('click', function() {
+        doSpin(Array(11).fill('abandon').concat(['about']), { serverOnly: true });
+    });
     updateDebugUiVisibility();
     await refreshIDBState();
     renderHitsHistory();

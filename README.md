@@ -11,7 +11,7 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
    - Checks 60 addresses per spin against the locally loaded bloom filter.
    - Local filter cached in IndexedDB — no re-download on reload.
 
-2. **Filter Test (`test.html`)**:
+2. **Address Check (`test.html`)**:
    - Direct address lookup: Base58, Bech32, Hash160, or public key input.
    - Client-side lookup (JS, sub-millisecond) vs. server-side (`test.php`, all filter sizes).
    - Shows per-filter results from server for comparison and debugging.
@@ -32,7 +32,7 @@ This C++ and PHP toolset processes terabytes of raw Bitcoin data (`blk*.dat`), e
    - Zero-RAM footprint. Typically < 1ms processing time.
 
 5. **Debug API (`test.php`)**:
-   - Used by the filter test page. Queries all available filter sizes in one request.
+   - Used by the address check page. Queries all available filter sizes in one request.
    - Returns per-filter results so you can compare accuracy across sizes.
 
 6. **Balance filters & UTXO SQLite**:
