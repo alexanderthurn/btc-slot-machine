@@ -265,13 +265,21 @@ function renderSqliteResult(key32, data, err) {
         return;
     }
     if (!data.count) {
-        box.textContent = `key32=${key32}\nrows=0`;
+        box.textContent =
+            `key32=${key32}\n` +
+            `rows=0\n` +
+            `total_sat=0 (0.00000000 BTC)\n` +
+            `note: this sqlite stores CURRENT unspent outputs only (UTXO set).`;
         return;
     }
-    let out = `key32=${key32}\nrows=${data.count} (limit ${data.limit})  total=${data.total_sat} sat (${satToBTC(data.total_sat)} BTC)\n`;
+    const txids = new Set((data.rows || []).map(r => r.txid_hex)).size;
+    let out =
+        `key32=${key32}\n` +
+        `rows=${data.count} (limit ${data.limit})  distinct_txids=${txids}\n` +
+        `total_sat=${data.total_sat} (${satToBTC(data.total_sat)} BTC)\n`;
     for (let i = 0; i < data.rows.length; i++) {
         const r = data.rows[i];
-        out += `${i + 1}. ${r.txid_hex}:${r.vout}  ${r.value_sat} sat\n`;
+        out += `${i + 1}. ${r.txid_hex}:${r.vout}  ${r.value_sat} sat (${satToBTC(r.value_sat)} BTC)\n`;
     }
     box.textContent = out.trim();
 }

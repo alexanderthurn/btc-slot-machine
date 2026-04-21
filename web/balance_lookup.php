@@ -37,13 +37,7 @@ $sql = 'SELECT hex(txid) AS txid_hex, vout, hex(key32) AS key32_hex, value_sat F
 $params = [];
 
 if ($hasTxid) {
-    $txidBin = hex2bin($txidHex);
-    if ($txidBin === false || strlen($txidBin) !== 32) {
-        echo json_encode(['ok' => false, 'error' => 'invalid txid hex'], JSON_UNESCAPED_SLASHES);
-        exit;
-    }
-    $sql .= ' AND txid = ?';
-    $params[] = $txidBin;
+    $sql .= " AND txid = X'" . strtoupper($txidHex) . "'";
 }
 
 if (isset($_GET['vout']) && $_GET['vout'] !== '') {
@@ -57,13 +51,7 @@ if (isset($_GET['vout']) && $_GET['vout'] !== '') {
 }
 
 if ($hasKey32) {
-    $kb = hex2bin($key32Hex);
-    if ($kb === false || strlen($kb) !== 32) {
-        echo json_encode(['ok' => false, 'error' => 'invalid key32 hex'], JSON_UNESCAPED_SLASHES);
-        exit;
-    }
-    $sql .= ' AND key32 = ?';
-    $params[] = $kb;
+    $sql .= " AND key32 = X'" . strtoupper($key32Hex) . "'";
 }
 
 $sql .= ' ORDER BY txid, vout LIMIT ' . (int)$limit;
