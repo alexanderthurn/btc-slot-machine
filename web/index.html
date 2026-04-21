@@ -73,9 +73,12 @@
             flex-direction: column;
             gap: 1px;
             cursor: pointer;
+            user-select: none;
         }
         .slot.locked { background: #fff6f6; }
-        .slot-top { display: flex; align-items: center; justify-content: space-between; line-height: 1; }
+        .slot-top {
+            display: flex; align-items: center; justify-content: space-between; line-height: 1;
+        }
         .slot-idx { font-size: 10px; color: #bbb; line-height: 1; }
         .slot-lock {
             border: none;
@@ -87,7 +90,93 @@
             user-select: none;
         }
         .slot-lock.locked { color: #c33; font-weight: 700; }
-        .slot-word { color: #111; word-break: break-all; }
+        .slot-word {
+            color: #111;
+            word-break: break-all;
+            cursor: default;
+            border-radius: 2px;
+            align-self: flex-start;
+            display: inline-block;
+            width: fit-content;
+            max-width: 100%;
+            box-sizing: border-box;
+            user-select: text;
+        }
+        .slot-word:hover {
+            cursor: pointer;
+            text-decoration: underline;
+            color: #0645ad;
+        }
+
+        .word-picker-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.35);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+            padding: 12px;
+            box-sizing: border-box;
+        }
+        .word-picker-overlay.open { display: flex; }
+        .word-picker-dialog {
+            background: #fff;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 12px 14px;
+            max-width: 340px;
+            width: 100%;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+        }
+        .word-picker-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .word-picker-close {
+            border: none;
+            background: transparent;
+            font-size: 22px;
+            line-height: 1;
+            cursor: pointer;
+            color: #888;
+            padding: 0 4px;
+        }
+        .word-picker-close:hover { color: #111; }
+        .word-picker-search {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #ccc;
+            font-family: monospace;
+            font-size: 13px;
+            box-sizing: border-box;
+        }
+        .word-picker-select {
+            width: 100%;
+            font-family: monospace;
+            font-size: 12px;
+            border: 1px solid #ddd;
+            padding: 4px;
+            flex: 1;
+            min-height: 200px;
+            max-height: 40vh;
+        }
+        .word-picker-actions { display: flex; justify-content: flex-end; gap: 8px; }
+        .word-picker-actions button {
+            padding: 6px 14px;
+            font-size: 13px;
+            cursor: pointer;
+            border: 1px solid #bbb;
+            background: #f5f5f5;
+        }
+        .word-picker-actions button:hover { background: #eaeaea; }
 
         @keyframes wordFlash {
             0%   { opacity: 0; }
@@ -161,6 +250,7 @@
         .scan-space-box .sse-num { font-family: monospace; font-size: 11px; word-break: break-all; color: #111; }
         .scan-space-box .sse-sub { font-size: 11px; color: #555; margin: 0 0 4px 0; }
         .scan-space-box .sse-analogy { font-size: 11px; color: #555; margin: 0 0 5px 0; padding-left: 0; }
+        .scan-space-box .sse-section-title { font-weight: 600; font-size: 11px; color: #444; margin: 10px 0 6px 0; }
         .scan-space-box .sse-rate { font-size: 11px; color: #444; margin: 0 0 4px 0; font-family: monospace; }
 
         /* single-spin address table */
@@ -235,7 +325,6 @@
             font-size: 11px;
             color: #444;
         }
-        #eduStatsTop { margin-bottom: 4px; line-height: 1.55; }
         #eduStatsAuto { margin-bottom: 4px; color: #666; line-height: 1.45; }
         #eduStatsAuto .stat-sep { color: #ccc; margin: 0 4px; }
         #eduProgressWrap { margin-top: 4px; }
@@ -289,7 +378,6 @@
         <a href="test.html">Address Check &#8599;</a>
     </div>
     <div class="hdr-right">
-        <button type="button" class="hdr-btn" id="btnFundedTest" title="11× abandon + about — known funded test mnemonic, checks server directly">test</button>
         <button type="button" class="hdr-btn" id="btnDebugToggle" title="Log, filter controls, extended autospin results" aria-pressed="false">debug</button>
     </div>
 </div>
@@ -297,6 +385,20 @@
 <!-- Slot grid -->
 <div class="slot-grid" id="slotGrid">
     <!-- 12 slots generated by JS -->
+</div>
+
+<div id="wordPickerOverlay" class="word-picker-overlay" aria-hidden="true">
+    <div class="word-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="wordPickerTitle">
+        <div class="word-picker-head">
+            <span id="wordPickerTitle">Choose word</span>
+            <button type="button" class="word-picker-close" id="wordPickerClose" aria-label="Close">&times;</button>
+        </div>
+        <input type="text" id="wordPickerSearch" class="word-picker-search" placeholder="Type to filter BIP39 words…" autocomplete="off" spellcheck="false">
+        <select id="wordPickerSelect" class="word-picker-select" size="14"></select>
+        <div class="word-picker-actions">
+            <button type="button" id="wordPickerApply">Use selected word</button>
+        </div>
+    </div>
 </div>
 
 <div class="spin-row">
@@ -318,8 +420,7 @@
 <div id="scanSpaceExplainer" class="scan-space-box" aria-live="polite"></div>
 </div>
 <div id="eduStatsBox">
-    <div id="eduStatsTop">Waiting for first spin…</div>
-    <div id="eduStatsAuto"></div>
+    <div id="eduStatsAuto">Waiting for first mnemonic…</div>
     <div id="eduProgressWrap">
         <div id="eduProgressBar"><div id="eduProgressFill"></div></div>
         <div id="eduProgressText">Progress: 0%</div>
@@ -838,6 +939,7 @@ function urlParamToWords(param) {
 // ── COPY WORDS ────────────────────────────────────────────────────────────────
 let currentWords = null;
 const slotLocks = Array(12).fill(false);
+let wordPickerSlotIdx = -1;
 const stateSpinCounts = Object.create(null);
 /** For exhaustive mode (fewer than 6 free words): ms when first counted spin started; frozen elapsed ms once 100%. */
 let exhaustiveRunStartByKey = Object.create(null);
@@ -1017,10 +1119,149 @@ function buildGrid() {
         const slot = document.createElement('div');
         slot.className = 'slot';
         slot.id = 'slot' + i;
-        slot.onclick = function(ev) { toggleWordLock(i, ev); };
-        slot.innerHTML = '<div class="slot-top"><span class="slot-idx">' + (i+1) + '</span><span class="slot-lock" id="slotLock' + i + '"></span></div><span class="slot-word">\u2014</span>';
+        slot.innerHTML = '<div class="slot-top"><span class="slot-idx">' + (i+1) + '</span><span class="slot-lock" id="slotLock' + i + '"></span></div><span class="slot-word" tabindex="0" role="button" aria-label="Choose word ' + (i + 1) + '">\u2014</span>';
+        const wordEl = slot.querySelector('.slot-word');
+        slot.addEventListener('click', function(ev) {
+            if (ev.target.closest('.slot-word')) return;
+            toggleWordLock(i, ev);
+        });
+        wordEl.addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            openWordPicker(i, ev);
+        });
+        wordEl.addEventListener('keydown', function(ev) {
+            if (ev.key === 'Enter' || ev.key === ' ') {
+                ev.preventDefault();
+                openWordPicker(i, ev);
+            }
+        });
         grid.appendChild(slot);
     }
+}
+
+function fillWordPickerSelect(query) {
+    const sel = document.getElementById('wordPickerSelect');
+    if (!sel || typeof BIP39_WORDLIST === 'undefined') return;
+    const q = (query || '').trim().toLowerCase();
+    sel.innerHTML = '';
+    const maxFiltered = 500;
+    let count = 0;
+    let i = 0;
+    if (!q) {
+        for (i = 0; i < BIP39_WORDLIST.length; i++) {
+            const w = BIP39_WORDLIST[i];
+            const opt = document.createElement('option');
+            opt.value = w;
+            opt.textContent = w;
+            sel.appendChild(opt);
+        }
+    } else {
+        for (i = 0; i < BIP39_WORDLIST.length && count < maxFiltered; i++) {
+            const w = BIP39_WORDLIST[i];
+            if (w.toLowerCase().startsWith(q)) {
+                const opt = document.createElement('option');
+                opt.value = w;
+                opt.textContent = w;
+                sel.appendChild(opt);
+                count++;
+            }
+        }
+        if (count === 0) {
+            for (i = 0; i < BIP39_WORDLIST.length && count < maxFiltered; i++) {
+                const w = BIP39_WORDLIST[i];
+                if (w.toLowerCase().indexOf(q) !== -1) {
+                    const opt = document.createElement('option');
+                    opt.value = w;
+                    opt.textContent = w;
+                    sel.appendChild(opt);
+                    count++;
+                }
+            }
+        }
+    }
+    if (sel.options.length) sel.selectedIndex = 0;
+}
+
+function openWordPicker(idx, ev) {
+    if (spinBusy || autoSpinning) return;
+    if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+    }
+    wordPickerSlotIdx = idx;
+    document.getElementById('wordPickerTitle').textContent = 'Choose word #' + (idx + 1);
+    const search = document.getElementById('wordPickerSearch');
+    search.value = '';
+    fillWordPickerSelect('');
+    const overlay = document.getElementById('wordPickerOverlay');
+    overlay.classList.add('open');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    requestAnimationFrame(function() { search.focus(); });
+}
+
+function closeWordPicker() {
+    wordPickerSlotIdx = -1;
+    const overlay = document.getElementById('wordPickerOverlay');
+    if (overlay) {
+        overlay.classList.remove('open');
+        overlay.setAttribute('aria-hidden', 'true');
+    }
+    document.body.style.overflow = '';
+}
+
+function applyWordToSlot(idx, word) {
+    if (!currentWords || currentWords.length !== 12) currentWords = Array(12).fill('abandon');
+    currentWords[idx] = word;
+    const slot = document.getElementById('slot' + idx);
+    if (slot) {
+        const wEl = slot.querySelector('.slot-word');
+        if (wEl) {
+            slot.classList.remove('flash');
+            wEl.textContent = word;
+        }
+    }
+    saveLockState();
+    resetSearchProgress();
+    try {
+        history.replaceState(null, '', '?m=' + wordsToUrlParam(currentWords));
+    } catch (e) {}
+}
+
+function applyWordFromPicker() {
+    if (wordPickerSlotIdx < 0) return;
+    const sel = document.getElementById('wordPickerSelect');
+    if (!sel || !sel.selectedOptions.length) return;
+    const word = sel.selectedOptions[0].value;
+    applyWordToSlot(wordPickerSlotIdx, word);
+    closeWordPicker();
+}
+
+function wireWordPickerUi() {
+    const overlay = document.getElementById('wordPickerOverlay');
+    const dialog = overlay.querySelector('.word-picker-dialog');
+    document.getElementById('wordPickerClose').addEventListener('click', closeWordPicker);
+    document.getElementById('wordPickerApply').addEventListener('click', applyWordFromPicker);
+    overlay.addEventListener('click', function(ev) {
+        if (ev.target === overlay) closeWordPicker();
+    });
+    dialog.addEventListener('click', function(ev) { ev.stopPropagation(); });
+    document.getElementById('wordPickerSearch').addEventListener('input', function() {
+        fillWordPickerSelect(this.value);
+    });
+    document.getElementById('wordPickerSearch').addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter') {
+            ev.preventDefault();
+            document.getElementById('wordPickerSelect').focus();
+        }
+    });
+    document.getElementById('wordPickerSelect').addEventListener('dblclick', applyWordFromPicker);
+    document.getElementById('wordPickerSelect').addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter') applyWordFromPicker();
+    });
+    document.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Escape' && overlay.classList.contains('open')) closeWordPicker();
+    });
 }
 
 function setSlotWord(idx, word) {
@@ -1036,26 +1277,6 @@ function setSlotWord(idx, word) {
     void slot.offsetWidth; // reflow to restart animation
     slot.classList.add('flash');
     wEl.textContent = word;
-}
-
-/** Funded test mnemonic: land abandon on reels 1–11, then reel 12 shows abandon briefly before about (avoids “skipping” the last abandon). */
-async function animateFundedTestSlots(words) {
-    const delay = function(ms) { return new Promise(function(r) { setTimeout(r, ms); }); };
-    const step = 85;
-    const isStd = words.length === 12
-        && words.slice(0, 11).every(function(w) { return w === 'abandon'; })
-        && words[11] === 'about';
-    if (!isStd) {
-        for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
-        return;
-    }
-    for (let i = 0; i < 11; i++) {
-        setSlotWord(i, 'abandon');
-        await delay(step);
-    }
-    setSlotWord(11, 'abandon');
-    await delay(Math.round(step * 2.2));
-    setSlotWord(11, 'about');
 }
 
 function renderCurrentWordsToSlots() {
@@ -1387,13 +1608,6 @@ function updateAutoStats() {
     const speed = elapsed > 0 ? (totalSpins / elapsed) : 0;
 
     const apsAll = elapsed > 0 ? (totalAddresses / elapsed).toFixed(1) : '0.0';
-    let html = totalSpins.toLocaleString() + ' spins'
-        + '<span class="stat-sep">·</span>' + spsAll + '/s'
-        + '<span class="stat-sep">·</span>' + totalAddresses.toLocaleString() + ' addr'
-        + '<span class="stat-sep">·</span>' + apsAll + '/s';
-
-    const eduAuto = document.getElementById('eduStatsAuto');
-    if (eduAuto) eduAuto.innerHTML = html;
 
     const locked = slotLocks.filter(Boolean).length;
     const free = 12 - locked;
@@ -1405,15 +1619,20 @@ function updateAutoStats() {
         ? (remaining > 1000000000000000000n ? 'very long' : formatDuration(Number(remaining) / speed))
         : 'n/a';
 
+    let html = totalSpins.toLocaleString() + ' mnemonics'
+        + '<span class="stat-sep">·</span>' + spsAll + ' mnemonics/s'
+        + '<span class="stat-sep">·</span>' + totalAddresses.toLocaleString() + ' addr'
+        + '<span class="stat-sep">·</span>' + apsAll + '/s'
+        + '<span class="stat-sep">·</span>ETA: ' + eta;
+
+    const eduAuto = document.getElementById('eduStatsAuto');
+    if (eduAuto) eduAuto.innerHTML = html;
+
     const progressBp = totalComb > 0n ? Number((checkedInState * 10000n) / totalComb) : 0;
     const progressPct = progressBp >= 10000 ? '100.00%' : (checkedInState > 0n && progressBp === 0 ? '<0.01%' : (progressBp / 100).toFixed(2) + '%');
     const widthPct = Math.max(0, Math.min(progressBp / 100, 100));
     const fill = document.getElementById('eduProgressFill');
 
-    document.getElementById('eduStatsTop').innerHTML =
-        'Speed: ' + spsAll + '/s'
-        + ' <span class="stat-sep">·</span> Space: ' + formatBigIntGrouped(totalComb)
-        + ' <span class="stat-sep">·</span> ETA: ' + eta;
     if (fill) {
         fill.style.width = widthPct + '%';
         if (widthPct > 0 && widthPct < 1) fill.style.minWidth = '2px';
@@ -1552,6 +1771,7 @@ function updateMnemonicSpaceExplainer() {
         scanCfg = getScanConfig();
     } catch (err) {}
     const nAddr = Math.max(0, scanCfg.enabledPaths.length) * scanCfg.perPathCount;
+    const addrSpaceTotal = nAddr > 0 ? space * BigInt(nAddr) : 0n;
     const elapsed = (Date.now() - pageStartTime) / 1000;
     const sps = elapsed > 0 ? (totalSpins / elapsed) : 0;
 
@@ -1562,12 +1782,15 @@ function updateMnemonicSpaceExplainer() {
     for (let ai = 0; ai < analogies.length; ai++)
         parts.push('<p class="sse-analogy">\u2014 ' + esc(analogies[ai]) + '</p>');
 
-    parts.push('<p class="sse-line" style="margin-top:8px">' + nAddr.toLocaleString() + ' address' + (nAddr === 1 ? '' : 'es') + ' checked per spin (enabled paths \u00d7 \u201cper path\u201d indexes).</p>');
-
+    parts.push('<p class="sse-line" style="margin-top:8px">Addresses checked per mnemonic.</p>');
+    parts.push('<p class="sse-sub">' + nAddr.toLocaleString() + ' address' + (nAddr === 1 ? '' : 'es') + ' will be checked (enabled paths \u00d7 \u201cper path\u201d indexes).</p>');
+    parts.push('<p class="sse-line"><span class="sse-num">' + esc(formatBigIntGrouped(addrSpaceTotal)) + '</span> possible addresses</p>');
+    
+    parts.push('<div class="sse-section-title">Expected duration</div>');
     const rates = [
         [1e6, '1,000,000'],
-        [1e9, '1 billion'],
-        [1e12, '1 trillion']
+        [1e11, '100 billion'],
+        [1e21, '1,000,000,000 trillion']
     ];
     for (let ri = 0; ri < rates.length; ri++) {
         const sec = approxSecondsForBigIntSpace(space, rates[ri][0]);
@@ -1575,7 +1798,7 @@ function updateMnemonicSpaceExplainer() {
     }
     if (sps > 0) {
         const secYou = approxSecondsForBigIntSpace(space, sps);
-        parts.push('<p class="sse-rate">At <strong>' + esc(sps.toFixed(2)) + '</strong> spins/s (measured on this page): <strong>' + esc(formatSearchDurationApproxSec(secYou)) + '</strong></p>');
+        parts.push('<p class="sse-rate">At <strong>' + esc(sps.toFixed(2)) + '</strong> mnemonics/s (measured on this page): <strong>' + esc(formatSearchDurationApproxSec(secYou)) + '</strong></p>');
     } else {
         parts.push('<p class="sse-sub">Spin once to measure your speed; it will appear here and in the stats box below.</p>');
     }
@@ -1610,8 +1833,6 @@ async function _doSpin(fixedWords, opts) {
     lastSpinHadFundedMatch = false;
     lastSpinExhaustiveDone = false;
     lastSpinFundedWords = '';
-    const serverOnly = !!(opts && opts.serverOnly);
-    const animateFundedTest = !!(opts && opts.animateFundedTest);
     const isAuto = autoSpinning; // capture now — consistent for the whole spin
     const btn = document.getElementById('btnSpin');
     btn.disabled = true;
@@ -1630,11 +1851,7 @@ async function _doSpin(fixedWords, opts) {
     if (!isAuto) history.replaceState(null, '', '?m=' + wordsToUrlParam(words));
 
     // 3. Display in slots with animation
-    if (animateFundedTest && !isAuto) {
-        await animateFundedTestSlots(words);
-    } else {
-        for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
-    }
+    for (let i = 0; i < 12; i++) setSlotWord(i, words[i]);
 
     if (!isAuto) log((spinPlan.exhaustive ? '[exhaustive] ' : '') + 'mnemonic: ' + words.join(' '), 'hi');
 
@@ -1670,62 +1887,7 @@ async function _doSpin(fixedWords, opts) {
     const tAddr = performance.now();
 
 
-    if (serverOnly) {
-        // Skip local filter — derive all selected addresses, check all against server directly
-        if (!isAuto) log('server-only check (no local filter required)\u2026', 'dim');
-        for (let pi = 0; pi < pathDefs.length; pi++) {
-            const {path, type, fn} = pathDefs[pi];
-            const acct = await derivePath(seed, path);
-            for (let n = 0; n < perPathCount; n++) {
-                const child = await childKey(acct, n, false);
-                const {addr, h160, filterKey} = fn(child.key);
-                const rowRef = trackDerived(type, n, addr, filterKey);
-                checked++;
-                found.push({type, addr, h160, filterKey, serverFound: null, rowRef});
-            }
-        }
-        try {
-            const t0s = performance.now();
-            const resp = await fetch('index.php', { method: 'POST', body: packLookups(found.map(function(f) { return serverPos(f.filterKey); })) });
-            const buf  = new Uint32Array(await resp.arrayBuffer());
-            serverFilterLabel = '16G';
-            for (let i = 0; i < found.length; i++) {
-                found[i].serverFound = readBit(buf, i) === 1;
-                if (found[i].rowRef) found[i].rowRef.money = 'no';
-            }
-            const hits = found.filter(function(f) { return f.serverFound; });
-            if (!isAuto) log('server: ' + hits.length + ' confirmed / ' + found.length + ' checked \xb7 ' + (performance.now()-t0s).toFixed(1) + 'ms', hits.length ? 'ok' : 'data');
-            if (hits.length > 0) {
-                await checkBalanceFilter(hits);
-                const balHits = hits.filter(function(f) { return f.balFound; }).length;
-                for (let i = 0; i < hits.length; i++) if (hits[i].rowRef) hits[i].rowRef.money = hits[i].balFound === true ? 'yes' : 'no';
-                if (!isAuto) log('balance filter: ' + balHits + '/' + hits.length + ' have unspent BTC', balHits ? 'ok' : 'data');
-            }
-            if (!isAuto && derivedRows && derivedRows.length) {
-                const map = {};
-                for (let i = 0; i < found.length; i++) {
-                    const k = normalizeKey32Hex(found[i].filterKey || '');
-                    if (k) map[k] = found[i];
-                }
-                for (let j = 0; j < derivedRows.length; j++) {
-                    const k = normalizeKey32Hex(derivedRows[j].filterKey || '');
-                    if (k && map[k]) {
-                        derivedRows[j].serverFound = map[k].serverFound;
-                        derivedRows[j].balFound = map[k].balFound;
-                    }
-                }
-            }
-            // keep only server hits in found for display
-            found.splice(0, found.length, ...hits);
-            if (hits.length > 0) {
-                const saved = await saveHitToHistory(words, hits);
-                if (saved) {
-                    lastSpinHadFundedMatch = true;
-                    lastSpinFundedWords = words.join(' ');
-                }
-            }
-        } catch(e) { log('server error: ' + e.message, 'err'); }
-    } else if (cf.view) {
+    if (cf.view) {
         if (!isAuto) {
             // Manual: derive every selected path × every index (e.g. 4 paths × 5 = 20 addresses)
             for (let pi = 0; pi < pathDefs.length; pi++) {
@@ -1876,6 +2038,7 @@ async function _doSpin(fixedWords, opts) {
 window.addEventListener('DOMContentLoaded', async function() {
     const urlParam0 = new URLSearchParams(window.location.search).get('m');
     buildGrid();
+    wireWordPickerUi();
     loadLockState();
     if (!localStorage.getItem(LOCK_STATE_KEY) && !urlParam0) {
         applyDefaultAbandonLocks();
@@ -1886,9 +2049,6 @@ window.addEventListener('DOMContentLoaded', async function() {
     syncDebugToggleUi();
     document.getElementById('btnDebugToggle').addEventListener('click', function() {
         setDebugMode(!debugMode);
-    });
-    document.getElementById('btnFundedTest').addEventListener('click', function() {
-        doSpin(Array(11).fill('abandon').concat(['about']), { serverOnly: true, animateFundedTest: true });
     });
     updateDebugUiVisibility();
     await refreshIDBState();
@@ -1908,12 +2068,16 @@ window.addEventListener('DOMContentLoaded', async function() {
         log('ready \u2014 no filter loaded', 'dim');
     }
 
-    // If URL has a mnemonic, spin with it immediately (doSpin auto-downloads filter if needed)
+    // If URL has a mnemonic, show it in the grid (user spins manually — no auto-spin on load)
     if (urlParam0) {
         try {
             const words = urlParamToWords(urlParam0);
-            if (words) doSpin(words);
-        } catch(e) {
+            if (words && words.length === 12) {
+                currentWords = words.slice();
+                renderCurrentWordsToSlots();
+                saveLockState();
+            }
+        } catch (e) {
             log('could not decode URL mnemonic', 'err');
         }
     }
